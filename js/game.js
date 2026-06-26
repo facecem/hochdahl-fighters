@@ -148,6 +148,22 @@ function playSound(kind) {
       gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.1);
       osc.start(t0); osc.stop(t0 + 0.1);
       break;
+    case 'slash':
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(1800, t0);
+      osc.frequency.exponentialRampToValueAtTime(300, t0 + 0.09);
+      gain.gain.setValueAtTime(0.16, t0);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.11);
+      osc.start(t0); osc.stop(t0 + 0.12);
+      break;
+    case 'boom':
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(120, t0);
+      osc.frequency.exponentialRampToValueAtTime(40, t0 + 0.3);
+      gain.gain.setValueAtTime(0.3, t0);
+      gain.gain.exponentialRampToValueAtTime(0.001, t0 + 0.35);
+      osc.start(t0); osc.stop(t0 + 0.35);
+      break;
   }
 }
 
@@ -187,6 +203,20 @@ let history = [];
 let rewindEffect = 0;
 let rewindGhosts = [];
 const REWIND_FRAMES = 180;
+
+let impactEffect = null;
+let slashStreak = null;
+
+function triggerImpactEffect(x, y, color, label, life) {
+  impactEffect = { x: x, y: y, color: color, label: label, life: life || 26, maxLife: life || 26 };
+}
+
+function triggerSlashStreak(x, y, facing, color) {
+  slashStreak = { x: x, y: y, facing: facing, color: color, life: 14, maxLife: 14 };
+}
+
+let cinematic = null;
+let prevGameState = 'FIGHT';
 
 const select = { p1Index: 0, p2Index: 1, p1Locked: false, p2Locked: false, countdown: 0 };
 
@@ -238,6 +268,14 @@ function createFighter(charDef, x, facing, controls) {
     comboCount: 0,
     comboTimer: 0,
     airAttacked: false,
+    tap: { left: -999, right: -999 },
+    dashCd: 0,
+    dashTime: 0,
+    afterimages: [],
+    wallBounced: false,
+    hitCount: 0,
+    lastHitFrame: -99,
+    groundBounce: false,
   };
 }
 
@@ -266,9 +304,14 @@ function startAttack(f, type) {
   f.state = type;
   f.stateTimer = 0;
   f.hasHit = false;
+  f.hitCount = 0;
+  f.lastHitFrame = -99;
   f.blocking = false;
   if (!f.grounded) f.vx *= 0.5;
   else f.vx = 0;
+  // Advancing moves (dash punch/kick) lunge the whole body forward
+  var mv = f.charDef.moves[type];
+  if (mv && mv.adv && f.grounded) f.vx = f.facing * mv.adv;
   if (type === 'special') {
     if (!f.charDef.moves.special.cooldown) f.meter = 0;
     playSound('special');
@@ -307,10 +350,20 @@ function updateFighter(f) {
   }
 
   for (var k in f.cooldowns) if (f.cooldowns[k] > 0) f.cooldowns[k]--;
+  if (f.dashCd > 0) f.dashCd--;
+  if (f.dashTime > 0) f.dashTime--;
   if (f.comboTimer > 0) {
     f.comboTimer--;
     if (f.comboTimer === 0) f.comboCount = 0;
   }
+  // Dash afterimage trail
+  if (f.afterimages.length) {
+    for (var ai = f.afterimages.length - 1; ai >= 0; ai--) {
+      f.afterimages[ai].life--;
+      if (f.afterimages[ai].life <= 0) f.afterimages.splice(ai, 1);
+    }
+  }
+  if (f.dashTime > 0) f.afterimages.push({ x: f.x, y: f.y, facing: f.facing, state: f.state, animTime: f.animTime, life: 8 });
 
   var opp = f === fighter1 ? fighter2 : fighter1;
   if (!inState(f, ATTACK_STATES.concat(['hit', 'ko', 'win', 'thrown']))) {
@@ -320,10 +373,25 @@ function updateFighter(f) {
   var canAct = inState(f, ['idle', 'walk', 'jump']);
 
   if (canAct) {
+    // Dash / backdash via double-tap
+    var DASH_WINDOW = 13;
+    var dashDir = 0;
+    if (justPressed(c.left)) { if (globalTime - f.tap.left < DASH_WINDOW) dashDir = -1; f.tap.left = globalTime; }
+    if (justPressed(c.right)) { if (globalTime - f.tap.right < DASH_WINDOW) dashDir = 1; f.tap.right = globalTime; }
+    if (dashDir !== 0 && f.grounded && f.dashCd === 0) {
+      f.vx = dashDir * f.charDef.stats.speed * 5;
+      f.dashCd = 30;
+      f.dashTime = 9;
+      playSound('whoosh');
+    }
+
     var targetVx = 0;
     if (keys.has(c.left)) targetVx = -f.charDef.stats.speed;
     else if (keys.has(c.right)) targetVx = f.charDef.stats.speed;
-    if (f.grounded) {
+    if (f.dashTime > 0) {
+      // preserve dash burst, just let it bleed off
+      f.vx *= 0.86;
+    } else if (f.grounded) {
       if (targetVx !== 0) { f.vx += (targetVx - f.vx) * 0.22; }
       else { f.vx *= 0.55; if (Math.abs(f.vx) < 0.1) f.vx = 0; }
     } else {
@@ -383,13 +451,41 @@ function updateFighter(f) {
     if (!f.grounded) {
       f.grounded = true;
       f.airAttacked = false;
-      spawnParticles(f.x + FIGHTER_WIDTH / 2, FLOOR_Y, '#888', 5, 2);
-      if (f.state === 'jump') f.state = 'idle';
+      if (f.groundBounce && f.state === 'hit') {
+        // Ground bounce: pop back up once for extended juggles
+        f.groundBounce = false;
+        f.vy = -7;
+        f.grounded = false;
+        f.stateTimer = Math.max(f.stateTimer, 20);
+        spawnParticles(f.x + FIGHTER_WIDTH / 2, FLOOR_Y, '#ffd166', 12, 6);
+        spawnPopup(f.x + FIGHTER_WIDTH / 2, f.y, 'BOUNCE!', '#ffd166');
+      } else {
+        spawnParticles(f.x + FIGHTER_WIDTH / 2, FLOOR_Y, '#888', 5, 2);
+        if (f.state === 'jump') f.state = 'idle';
+      }
     }
   }
 
+  // Friction for advancing attacks so the lunge bleeds off
+  if (isAttackState(f) && f.grounded) f.vx *= 0.86;
+
   f.x += f.vx;
+  // Wall bounce: a hard knockback into the screen edge ricochets back (corner combos)
+  if (f.state === 'hit' && !f.wallBounced && Math.abs(f.vx) > 7) {
+    if (f.x <= 0 || f.x >= CANVAS_W - FIGHTER_WIDTH) {
+      f.vx = -f.vx * 0.55;
+      f.vy = -5.5;
+      f.grounded = false;
+      f.wallBounced = true;
+      f.stateTimer += 8;
+      shake = Math.min(18, shake + 6);
+      var wbx = f.x <= 0 ? 6 : CANVAS_W - 6;
+      spawnParticles(wbx, f.y + FIGHTER_HEIGHT * 0.4, '#ffd166', 14, 7);
+      spawnPopup(f.x + FIGHTER_WIDTH / 2, f.y, 'WALL BOUNCE!', '#4fc3f7');
+    }
+  }
   f.x = Math.max(0, Math.min(CANVAS_W - FIGHTER_WIDTH, f.x));
+  if (f.state !== 'hit' && f.state !== 'thrown') f.wallBounced = false;
 
   var overlap = FIGHTER_WIDTH - Math.abs(fighter1.x - fighter2.x);
   if (overlap > 0 && f.grounded) {
@@ -411,6 +507,7 @@ function updateFighter(f) {
       var wasParryStunned = f.parryStunned;
       f.parryStunned = false;
       f.hasHit = false;
+      f.hitCount = 0;
       if (wasParryStunned) {
         f.state = 'hit';
         f.stateTimer = PARRY_STUN;
@@ -479,20 +576,29 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
     finalKnock *= 1.3;
     stun += 6;
   }
+  // Combo damage scaling — long combos deal less per hit
+  var comboSoFar = attacker.comboTimer > 0 ? attacker.comboCount : 0;
+  var scaleTable = [1, 1, 0.85, 0.72, 0.6, 0.5, 0.42, 0.35];
+  var dmgScale = scaleTable[Math.min(scaleTable.length - 1, comboSoFar)];
+  finalDmg = Math.max(1, Math.round(finalDmg * dmgScale));
   defender.hp = Math.max(0, defender.hp - finalDmg);
   defender.hitFlash = 8;
   var dir = defender.x < attacker.x ? -1 : 1;
-  defender.vx = dir * finalKnock;
-  if (!defender.grounded) defender.vy = -3;
+  // Pull-in moves drag the opponent toward the attacker instead of away
+  defender.vx = (moveFlags.pullIn ? -dir * Math.min(finalKnock, 7) : dir * finalKnock);
+  if (!defender.grounded) defender.vy = -4.5;
 
   // Launcher
   if (moveFlags.launcher && defender.grounded) {
     defender.vy = -8;
     defender.grounded = false;
   }
+  // Ground bounce: mark so the defender pops back up when they land
+  if (moveFlags.groundBounce) defender.groundBounce = true;
 
+  var fxColor = moveFlags.fx || '#ffe066';
   playSound('hit');
-  spawnSparks(hx, hy, dir, '#ffe066', 12);
+  spawnSparks(hx, hy, dir, fxColor, 12);
   spawnParticles(hx, hy, '#ff8844', 6, 4);
   spawnPopup(hx, hy - 20, '-' + finalDmg, finalDmg >= 15 ? '#ff5252' : '#ffd166');
   if (isCounter) spawnPopup(hx, hy - 40, 'COUNTER!', '#ff8800');
@@ -504,9 +610,15 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
   hitstop = finalDmg >= 15 ? 8 : 4;
 
   attacker.comboCount = attacker.comboTimer > 0 ? attacker.comboCount + 1 : 1;
-  attacker.comboTimer = 45;
+  attacker.comboTimer = 50;
   if (attacker.comboCount >= 2) {
-    spawnPopup(hx, hy - 60, attacker.comboCount + ' HITS!', '#ffcc00');
+    spawnPopup(hx, hy - 60, attacker.comboCount + ' HITS', '#ffcc00');
+    var rank = attacker.comboCount >= 8 ? 'INSANE!' : attacker.comboCount >= 6 ? 'BRUTAL!'
+      : attacker.comboCount >= 4 ? 'SICK!' : attacker.comboCount >= 3 ? 'NICE!' : '';
+    if (rank) {
+      spawnPopup(hx, hy - 88, rank, attacker.comboCount >= 6 ? '#ff3b3b' : '#ff9100');
+      shake = Math.min(20, shake + attacker.comboCount);
+    }
   }
 
   attacker.meter = Math.min(METER_MAX, attacker.meter + finalDmg * METER_GAIN_ATTACKER);
@@ -516,11 +628,78 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
   if (defender.hp <= 0) slowmo = 45;
 }
 
+// --- Cinematic Super Moves (Injustice-style) ---
+function startCinematic(attacker, defender, kind, dmg) {
+  cinematic = {
+    kind: kind,
+    attacker: attacker,
+    defender: defender,
+    dmg: dmg,
+    timer: 0,
+    total: kind === 'max' ? 310 : 300,
+    flash: 1,
+  };
+  attacker.vx = 0; attacker.vy = 0; attacker.grounded = true; attacker.y = GROUND_Y;
+  defender.vx = 0; defender.vy = 0; defender.grounded = true; defender.y = GROUND_Y;
+  prevGameState = gameState;
+  gameState = 'CINEMATIC';
+  playSound('special');
+}
+
+function finishCinematic() {
+  var cin = cinematic;
+  var a = cin.attacker, d = cin.defender;
+  d.hp = Math.max(0, d.hp - cin.dmg);
+  var dir = d.x < a.x ? -1 : 1;
+  d.state = 'hit';
+  d.stateTimer = 30;
+  d.stunned = true;
+  d.hitFlash = 8;
+  d.grounded = true; d.y = GROUND_Y;
+  d.vx = dir * 9; d.vy = -4;
+  d.x = Math.max(0, Math.min(CANVAS_W - FIGHTER_WIDTH, a.x + dir * FIGHTER_WIDTH * 1.6));
+  d.facing = -dir;
+  a.state = 'idle'; a.stateTimer = 0; a.hasHit = true; a.facing = dir;
+  spawnPopup(d.x + FIGHTER_WIDTH / 2, d.y + 30, '-' + cin.dmg, '#ff3b3b');
+  spawnParticles(d.x + FIGHTER_WIDTH / 2, d.y + FIGHTER_HEIGHT * 0.4, '#c0392b', 24, 7);
+  shake = 16;
+  cinematic = null;
+  gameState = prevGameState === 'CINEMATIC' ? 'FIGHT' : prevGameState;
+  if (d.hp <= 0) endRound();
+}
+
+function updateCinematic() {
+  var cin = cinematic;
+  if (!cin) { gameState = 'FIGHT'; return; }
+  cin.timer++;
+  var T = cin.timer;
+  if (cin.flash > 0) cin.flash = Math.max(0, cin.flash - 0.06);
+
+  var mid = cin.attacker.x + (cin.defender.x - cin.attacker.x) / 2 + FIGHTER_WIDTH / 2;
+
+  if (cin.kind === 'max') {
+    if (T === 1) shake = 12;
+    if (T === 64) { playSound('uppercut'); shake = 10; spawnParticles(mid, 360, '#ffe066', 10, 5); }
+    if (T === 128) { playSound('whoosh'); for (var i = 0; i < 14; i++) spawnParticles(mid + (Math.random() - 0.5) * 200, 200 + Math.random() * 120, Math.random() < 0.5 ? '#3fa34d' : '#e8862e', 1, 4); }
+    if (T === 214) { playSound('boom'); playSound('ko'); shake = 26; cin.flash = 0.9; for (var j = 0; j < 30; j++) spawnParticles(mid + (Math.random() - 0.5) * 160, FLOOR_Y - Math.random() * 30, '#9a8468', 1, 8); }
+  } else {
+    if (T === 1) shake = 10;
+    [54, 74, 94, 114].forEach(function (f) {
+      if (T === f) { playSound('slash'); shake = 9; cin.flash = 0.45; spawnParticles(mid + (Math.random() - 0.5) * 120, 280 + Math.random() * 80, '#ff4d6d', 6, 6); }
+    });
+    if (T === 210) { playSound('boom'); playSound('ko'); shake = 26; cin.flash = 1; spawnParticles(mid, 320, '#ff4d6d', 30, 8); }
+  }
+
+  updateParticles();
+  if (T >= cin.total) finishCinematic();
+}
+
 function checkMeleeHit(attacker, defender) {
   if (!isAttackState(attacker)) return;
   var move = attacker.charDef.moves[attacker.state];
   if (move.type === 'projectile' || move.type === 'rewind') return;
-  if (attacker.hasHit) return;
+  var maxHits = move.hits || 1;
+  if ((attacker.hitCount || 0) >= maxHits) return;
 
   var activeEnd = !attacker.grounded ? Math.round(move.active[1] * 0.7) : move.active[1];
   var activeStart = !attacker.grounded ? Math.round(move.active[0] * 0.7) : move.active[0];
@@ -528,14 +707,38 @@ function checkMeleeHit(attacker, defender) {
 
   var ac = attacker.x + FIGHTER_WIDTH / 2;
   var dc = defender.x + FIGHTER_WIDTH / 2;
-  var dist = Math.abs(dc - ac);
+  var dx = dc - ac;
+  var dist = Math.abs(dx);
+  // Defender must be in front of the attacker's facing direction (small tolerance for body overlap)
+  var inFront = attacker.facing > 0 ? dx >= -FIGHTER_WIDTH * 0.25 : dx <= FIGHTER_WIDTH * 0.25;
+  // Vertical reach: kicks are low and whiff against an airborne defender (jump over them to dodge);
+  // jump-in attacks reach down generously; everything else needs roughly matching height
+  var vDist = Math.abs(attacker.y - defender.y);
+  var isKickMove = attacker.state === 'kick' || attacker.state === 'fwd_kick';
+  var inReach;
+  if (attacker.grounded && !defender.grounded) {
+    inReach = isKickMove ? false : vDist <= FIGHTER_HEIGHT * 0.25;
+  } else if (!attacker.grounded && defender.grounded) {
+    inReach = vDist <= FIGHTER_HEIGHT * 0.9;
+  } else {
+    inReach = vDist <= FIGHTER_HEIGHT * 0.6;
+  }
+  var hit = inFront && inReach;
 
   var isCounter = isAttackState(defender) && defender.stateTimer < defender.charDef.moves[defender.state].active[0];
   var airBonus = !attacker.grounded ? 0.8 : 1;
-  var moveFlags = { launcher: !!move.launcher, knockdown: !!move.knockdown };
+  var moveFlags = { launcher: !!move.launcher, knockdown: !!move.knockdown, pullIn: !!move.pullIn, groundBounce: !!move.groundBounce, fx: move.fx };
+
+  // Cinematic super move: Max (judo grab) and Luka (sword) trigger a full Injustice-style cutscene
+  if (attacker.state === 'special' && (move.type === 'grab' || move.type === 'melee')
+      && hit && dist <= move.range && !defender.blocking) {
+    attacker.hasHit = true;
+    startCinematic(attacker, defender, attacker.charDef.id, Math.round(move.dmg * 1.8));
+    return;
+  }
 
   if (move.type === 'grab') {
-    if (dist <= move.range && !defender.blocking) {
+    if (hit && dist <= move.range && !defender.blocking) {
       defender.hp = Math.max(0, defender.hp - move.dmg);
       var hx = attacker.x + FIGHTER_WIDTH / 2;
       var hy = attacker.y + FIGHTER_HEIGHT * 0.3;
@@ -564,11 +767,13 @@ function checkMeleeHit(attacker, defender) {
     return;
   }
 
-  if (dist <= move.range) {
+  if (hit && dist <= move.range && globalTime - (attacker.lastHitFrame || -99) >= (move.hitGap || 4)) {
     var airDmg = !attacker.grounded && attacker.state === 'kick' ? Math.round(move.dmg * 0.6) : move.dmg;
     applyDamage(defender, airDmg, attacker, (move.knockback || 0) * airBonus, move.type === 'grab', move.stun || 14, isCounter, false, moveFlags);
+    attacker.hitCount = (attacker.hitCount || 0) + 1;
+    attacker.lastHitFrame = globalTime;
+    attacker.hasHit = true;
   }
-  attacker.hasHit = true;
 }
 
 // --- Rewind ---
@@ -844,10 +1049,15 @@ function updateFight() {
 
   if (hitstop > 0) { hitstop--; return; }
 
+  if (impactEffect && impactEffect.life > 0) { impactEffect.life--; if (impactEffect.life <= 0) impactEffect = null; }
+  if (slashStreak && slashStreak.life > 0) { slashStreak.life--; if (slashStreak.life <= 0) slashStreak = null; }
+
   updateFighter(fighter1);
   updateFighter(fighter2);
   checkMeleeHit(fighter1, fighter2);
+  if (gameState !== 'FIGHT') return;
   checkMeleeHit(fighter2, fighter1);
+  if (gameState !== 'FIGHT') return;
   checkProjectileSpawn(fighter1);
   checkProjectileSpawn(fighter2);
   checkRewindTrigger(fighter1);
@@ -986,6 +1196,20 @@ function drawFighter(f) {
   ctx.ellipse(f.x + FIGHTER_WIDTH / 2, FLOOR_Y + 8, 34 * shadowScale, 8 * shadowScale, 0, 0, Math.PI * 2);
   ctx.fill();
 
+  // Dash afterimages
+  if (f.afterimages && f.afterimages.length) {
+    f.afterimages.forEach(function (g) {
+      ctx.save();
+      ctx.globalAlpha = (g.life / 8) * 0.35;
+      ctx.translate(g.x + FIGHTER_WIDTH / 2, g.y);
+      ctx.scale(g.facing, 1);
+      ctx.translate(-FIGHTER_WIDTH / 2, 0);
+      f.charDef.draw(ctx, { charDef: f.charDef, state: g.state, stateTimer: 0, hitFlash: 0, facing: g.facing, animTime: g.animTime, grounded: true, blocking: false, stunned: false }, FIGHTER_WIDTH, FIGHTER_HEIGHT);
+      ctx.restore();
+    });
+    ctx.globalAlpha = 1;
+  }
+
   ctx.save();
   ctx.translate(f.x + FIGHTER_WIDTH / 2, f.y);
   ctx.scale(f.facing, 1);
@@ -1107,6 +1331,288 @@ function drawRewindOverlay() {
   ctx.restore();
 }
 
+// --- Cinematic rendering ---
+function cinLerp(a, b, t) { t = t < 0 ? 0 : t > 1 ? 1 : t; return a + (b - a) * t; }
+
+function mkActor(charDef, state, stateTimer, extra) {
+  var o = { charDef: charDef, state: state, stateTimer: stateTimer, animTime: globalTime, grounded: true, hitFlash: 0, stunned: false, facing: 1, blocking: false };
+  if (extra) for (var k in extra) o[k] = extra[k];
+  return o;
+}
+
+function drawActor(charDef, centerX, feetY, facing, scale, st, rot) {
+  ctx.save();
+  ctx.translate(centerX, feetY);
+  ctx.scale(facing * scale, scale);
+  if (rot) {
+    ctx.translate(0, -FIGHTER_HEIGHT * 0.5);
+    ctx.rotate(rot);
+    ctx.translate(0, FIGHTER_HEIGHT * 0.5);
+  }
+  ctx.translate(-FIGHTER_WIDTH / 2, -FIGHTER_HEIGHT);
+  charDef.draw(ctx, st, FIGHTER_WIDTH, FIGHTER_HEIGHT);
+  ctx.restore();
+}
+
+function cinSpark(x, y, r, color) {
+  ctx.save();
+  ctx.strokeStyle = color; ctx.lineWidth = 4; ctx.globalAlpha = 0.9;
+  for (var i = 0; i < 8; i++) {
+    var a = (i / 8) * Math.PI * 2 + globalTime * 0.1;
+    ctx.beginPath();
+    ctx.moveTo(x + Math.cos(a) * r * 0.3, y + Math.sin(a) * r * 0.3);
+    ctx.lineTo(x + Math.cos(a) * r, y + Math.sin(a) * r);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function cinRings(x, y, p, color) {
+  if (p < 0 || p > 1) return;
+  ctx.save();
+  ctx.strokeStyle = color; ctx.lineWidth = 5; ctx.globalAlpha = 1 - p;
+  for (var r = 0; r < 3; r++) {
+    ctx.beginPath(); ctx.arc(x, y, p * 220 + r * 40, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function cinCrater(x, y, p) {
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, 1 - p);
+  ctx.strokeStyle = '#caa86b'; ctx.lineWidth = 4;
+  for (var i = -3; i <= 3; i++) {
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + i * 40, y - 30 - Math.abs(i) * 8 - p * 40);
+    ctx.stroke();
+  }
+  ctx.globalAlpha = Math.max(0, 0.6 - p * 0.6);
+  ctx.fillStyle = '#9a8468';
+  ctx.beginPath(); ctx.ellipse(x, y, 120 * (0.5 + p), 18, 0, 0, Math.PI * 2); ctx.fill();
+  ctx.restore();
+}
+
+function drawSpeedLines(cin) {
+  ctx.save();
+  var cxp = CANVAS_W / 2, cyp = CANVAS_H / 2 - 20;
+  ctx.strokeStyle = cin.kind === 'max' ? 'rgba(120,180,90,0.10)' : 'rgba(200,80,120,0.12)';
+  ctx.lineWidth = 3;
+  for (var i = 0; i < 40; i++) {
+    var a = (i / 40) * Math.PI * 2 + cin.timer * 0.02;
+    var r0 = 200 + (i % 3) * 50;
+    ctx.beginPath();
+    ctx.moveTo(cxp + Math.cos(a) * r0, cyp + Math.sin(a) * r0);
+    ctx.lineTo(cxp + Math.cos(a) * 1100, cyp + Math.sin(a) * 1100);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawCinSlashes(cin) {
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+  for (var i = 0; i < 4; i++) {
+    var phase = (cin.timer * 0.08 + i * 1.7) % 3;
+    if (phase > 1.2) continue;
+    var alpha = 1 - phase;
+    ctx.globalAlpha = alpha;
+    ctx.lineWidth = 4 + (1 - phase) * 8;
+    var ox = CANVAS_W / 2 + (i % 2 ? -1 : 1) * (120 + i * 30);
+    var oy = 260 + (i * 60);
+    var dir = i % 2 ? 1 : -1;
+    ctx.beginPath();
+    ctx.moveTo(ox - dir * 220, oy - 160);
+    ctx.lineTo(ox + dir * 220, oy + 160);
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawGiantSlash(x, p) {
+  ctx.save();
+  ctx.translate(x, CANVAS_H / 2 - 20);
+  ctx.rotate(-0.9);
+  var len = 1400 * p;
+  var grad = ctx.createLinearGradient(0, -len / 2, 0, len / 2);
+  grad.addColorStop(0, 'rgba(255,255,255,0)');
+  grad.addColorStop(0.5, 'rgba(255,255,255,1)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.strokeStyle = grad;
+  ctx.lineWidth = 10 + (1 - p) * 40;
+  ctx.beginPath(); ctx.moveTo(0, -len / 2); ctx.lineTo(0, len / 2); ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,80,120,0.6)';
+  ctx.lineWidth = 4;
+  ctx.beginPath(); ctx.moveTo(0, -len / 2); ctx.lineTo(0, len / 2); ctx.stroke();
+  ctx.restore();
+}
+
+function drawMaxSuper(cin) {
+  var T = cin.timer;
+  var max = cin.attacker.charDef, opp = cin.defender.charDef;
+  var CX = CANVAS_W / 2;
+  if (T < 60) {
+    var s = cinLerp(2.9, 2.4, T / 60);
+    drawActor(opp, CX + 110, 500, -1, s, mkActor(opp, 'hit', T));
+    drawActor(max, CX - 120, 500, 1, s, mkActor(max, 'special', 10));
+    if (T < 14) cinSpark(CX, 360, 90, '#ffe066');
+  } else if (T < 126) {
+    var push = cinLerp(0, 45, (T - 60) / 66);
+    drawActor(opp, CX + 95 - push * 0.3, 525, -1, 3.0, mkActor(opp, 'hit', 14));
+    drawActor(max, CX - 110 + push, 525, 1, 3.0, mkActor(max, 'fwd_kick', 16));
+    if (T >= 64 && T < 82) cinSpark(CX, 380, 70, '#ffffff');
+  } else if (T < 204) {
+    var lift = (T - 126) / 60;
+    drawActor(max, CX - 20, 545, 1, 2.4, mkActor(max, 'special', 24));
+    var rot = cinLerp(0.3, Math.PI * 0.95, lift);
+    var dfy = cinLerp(430, 250, lift);
+    drawActor(opp, CX - 20, dfy, -1, 2.3, mkActor(opp, 'hit', 20), rot);
+  } else if (T < 250) {
+    var prog = (T - 204) / 30;
+    drawActor(max, CX - 40, 555, 1, 2.6, mkActor(max, 'fwd_punch', 18));
+    var dfy2 = cinLerp(250, 565, prog);
+    var rot2 = cinLerp(Math.PI * 0.95, Math.PI * 1.5, prog);
+    drawActor(opp, CX + 70, dfy2, -1, 2.6, mkActor(opp, prog > 0.9 ? 'ko' : 'hit', 6), rot2);
+    if (T >= 214) cinCrater(CX + 50, FLOOR_Y, (T - 214) / 36);
+  } else {
+    drawActor(max, CX - 150, 560, 1, 1.9, mkActor(max, 'win', T));
+    drawActor(opp, CX + 110, 580, -1, 1.9, mkActor(opp, 'ko', 0));
+    cinRings(CX + 50, 540, (T - 250) / 60, '#ffcc00');
+  }
+}
+
+function drawLukaSuper(cin) {
+  var T = cin.timer;
+  var luka = cin.attacker.charDef, opp = cin.defender.charDef;
+  var CX = CANVAS_W / 2;
+  if (T < 54) {
+    var s = cinLerp(2.7, 2.3, T / 54);
+    var dashX = cinLerp(-220, CX - 120, T / 42);
+    drawActor(opp, CX + 110, 500, -1, s, mkActor(opp, 'idle', 0));
+    ctx.save(); ctx.globalAlpha = 0.45;
+    drawActor(luka, dashX, 500, 1, s, mkActor(luka, 'special', 8));
+    ctx.restore();
+    drawActor(luka, CX - 120, 500, 1, s, mkActor(luka, 'special', 12));
+  } else if (T < 130) {
+    drawActor(luka, CX - 100, 520, 1, 2.8, mkActor(luka, 'special', 18));
+    drawActor(opp, CX + 90, 520, -1, 2.8, mkActor(opp, 'hit', (T % 18) < 9 ? 16 : 8));
+    drawCinSlashes(cin);
+  } else if (T < 210) {
+    var jump = (T - 130) / 60;
+    var g = ctx.createRadialGradient(CX, 300, 30, CX, 300, 260);
+    g.addColorStop(0, 'rgba(255,240,210,0.5)'); g.addColorStop(1, 'rgba(255,240,210,0)');
+    ctx.fillStyle = g; ctx.fillRect(CX - 260, 40, 520, 520);
+    drawActor(opp, CX + 70, 580, -1, 2.4, mkActor(opp, 'hit', 22));
+    var ly = cinLerp(545, 340, jump);
+    drawActor(luka, CX - 40, ly, 1, 2.5, mkActor(luka, 'special', 14));
+  } else if (T < 250) {
+    var prog = (T - 210) / 22;
+    drawActor(opp, CX + 60, 580, -1, 2.6, mkActor(opp, prog > 0.8 ? 'ko' : 'hit', 6));
+    drawActor(luka, CX - 30, 560, 1, 2.6, mkActor(luka, 'kick', 18));
+    drawGiantSlash(CX + 30, prog < 1 ? prog : 1);
+  } else {
+    drawActor(luka, CX - 150, 560, 1, 1.9, mkActor(luka, 'win', T));
+    drawActor(opp, CX + 110, 580, -1, 1.9, mkActor(opp, 'ko', 0));
+    cinRings(CX + 50, 520, (T - 250) / 60, '#ff4d6d');
+  }
+}
+
+function drawSuperBanner(cin) {
+  var T = cin.timer;
+  var name = cin.attacker.charDef.moves.special.name.toUpperCase();
+  var who = cin.attacker.charDef.name.toUpperCase();
+  var slide = Math.min(1, T / 18);
+  var out = T > cin.total - 28 ? Math.max(0, (cin.total - T) / 28) : 1;
+  var x = CANVAS_W / 2 + (1 - slide) * -500;
+  ctx.save();
+  ctx.globalAlpha = out;
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 52px monospace';
+  ctx.lineWidth = 6; ctx.strokeStyle = '#000';
+  ctx.strokeText(name, x, 54);
+  ctx.fillStyle = '#fff';
+  ctx.fillText(name, x, 54);
+  ctx.font = 'bold 20px monospace';
+  ctx.fillStyle = cin.kind === 'max' ? '#9fe06a' : '#ff6f91';
+  ctx.fillText('★ ' + who + ' ★', CANVAS_W / 2 + (1 - slide) * 500, CANVAS_H - 26);
+  ctx.restore();
+}
+
+function drawCinematic() {
+  var cin = cinematic;
+  if (!cin) return;
+  var T = cin.timer;
+  var bg = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
+  if (cin.kind === 'max') { bg.addColorStop(0, '#10140a'); bg.addColorStop(1, '#04060a'); }
+  else { bg.addColorStop(0, '#160a18'); bg.addColorStop(1, '#05030a'); }
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  drawSpeedLines(cin);
+  if (cin.kind === 'max') drawMaxSuper(cin); else drawLukaSuper(cin);
+  drawParticles();
+
+  var vg = ctx.createRadialGradient(CANVAS_W / 2, CANVAS_H / 2, 200, CANVAS_W / 2, CANVAS_H / 2, 760);
+  vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.7)');
+  ctx.fillStyle = vg; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+
+  var barH = 80 * Math.min(1, T / 12);
+  if (cin.total - T < 14) barH = 80 * Math.max(0, (cin.total - T) / 14);
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, CANVAS_W, barH);
+  ctx.fillRect(0, CANVAS_H - barH, CANVAS_W, barH);
+
+  drawSuperBanner(cin);
+
+  if (cin.flash > 0) { ctx.fillStyle = 'rgba(255,255,255,' + cin.flash + ')'; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H); }
+}
+
+function drawSlashStreak() {
+  if (!slashStreak) return;
+  var t = slashStreak.life / slashStreak.maxLife;
+  ctx.save();
+  ctx.translate(slashStreak.x, slashStreak.y);
+  ctx.scale(slashStreak.facing, 1);
+  ctx.rotate(-0.5);
+  ctx.globalAlpha = t;
+  var grad = ctx.createLinearGradient(-170, 0, 170, 0);
+  grad.addColorStop(0, 'rgba(255,255,255,0)');
+  grad.addColorStop(0.5, slashStreak.color);
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.strokeStyle = grad;
+  ctx.lineWidth = 6 + (1 - t) * 10;
+  ctx.beginPath(); ctx.moveTo(-170, 0); ctx.lineTo(170, 0); ctx.stroke();
+  ctx.restore();
+}
+
+function drawImpactEffect() {
+  if (!impactEffect) return;
+  var t = impactEffect.life / impactEffect.maxLife;
+  ctx.save();
+  ctx.globalAlpha = t;
+  ctx.strokeStyle = impactEffect.color;
+  ctx.lineWidth = 4;
+  for (var r = 0; r < 3; r++) {
+    var radius = (1 - t) * 100 + r * 28;
+    ctx.beginPath(); ctx.arc(impactEffect.x, impactEffect.y, radius, 0, Math.PI * 2); ctx.stroke();
+  }
+  ctx.restore();
+  if (impactEffect.label && t > 0.35) {
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, t * 1.6);
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 30px monospace';
+    var scale = 1 + (1 - t) * 0.5;
+    ctx.translate(impactEffect.x, impactEffect.y - 75);
+    ctx.scale(scale, scale);
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = '#000';
+    ctx.strokeText(impactEffect.label, 0, 0);
+    ctx.fillStyle = impactEffect.color;
+    ctx.fillText(impactEffect.label, 0, 0);
+    ctx.restore();
+  }
+}
+
 function drawFightScene() {
   drawBackground();
   drawFighter(fighter1);
@@ -1114,6 +1620,8 @@ function drawFightScene() {
   projectiles.forEach(function (p) { drawProjectile(ctx, p); });
   drawParticles();
   drawRewindOverlay();
+  drawSlashStreak();
+  drawImpactEffect();
   drawHUD();
 }
 
@@ -1202,13 +1710,14 @@ function drawSelect() {
 }
 
 // --- Main Loop ---
-function loop() {
-  globalTime++;
-  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+// Fixed-timestep update so game speed stays the same regardless of display refresh rate
+const STEP_MS = 1000 / 60;
+let accumulator = 0;
+let lastTime = null;
 
-  ctx.save();
+function update() {
+  globalTime++;
   if (shake > 0) {
-    ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
     shake *= 0.85;
     if (shake < 0.5) shake = 0;
   }
@@ -1216,37 +1725,83 @@ function loop() {
   switch (gameState) {
     case 'TITLE':
       updateTitle();
-      drawTitle();
       break;
     case 'SELECT':
       updateSelect();
-      drawSelect();
       break;
     case 'ROUND_INTRO':
       updateRoundIntro();
-      drawRoundIntro();
       break;
     case 'FIGHT':
       updateFight();
-      updateParticles();
-      drawFightScene();
+      if (gameState === 'FIGHT') updateParticles();
+      break;
+    case 'CINEMATIC':
+      updateCinematic();
       break;
     case 'ROUND_END':
       updateRoundEnd();
+      break;
+    case 'MATCH_END':
+      updateMatchEnd();
+      break;
+  }
+
+  prevKeys = new Set(keys);
+}
+
+function render() {
+  ctx.clearRect(0, 0, CANVAS_W, CANVAS_H);
+
+  ctx.save();
+  if (shake > 0) {
+    ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+  }
+
+  switch (gameState) {
+    case 'TITLE':
+      drawTitle();
+      break;
+    case 'SELECT':
+      drawSelect();
+      break;
+    case 'ROUND_INTRO':
+      drawRoundIntro();
+      break;
+    case 'FIGHT':
+      drawFightScene();
+      break;
+    case 'CINEMATIC':
+      drawCinematic();
+      break;
+    case 'ROUND_END':
       drawFightScene();
       drawOverlay(roundResultText, false);
       break;
     case 'MATCH_END':
-      updateMatchEnd();
       drawFightScene();
       drawOverlay(matchResultText, true);
       break;
   }
 
   ctx.restore();
-  prevKeys = new Set(keys);
+}
+
+function loop(now) {
+  if (lastTime === null) lastTime = now;
+  var frameTime = now - lastTime;
+  lastTime = now;
+  if (frameTime > 250) frameTime = 250; // avoid spiral of death after tab was backgrounded
+
+  accumulator += frameTime;
+  while (accumulator >= STEP_MS) {
+    update();
+    accumulator -= STEP_MS;
+  }
+
+  render();
   requestAnimationFrame(loop);
 }
 
-loop();
+requestAnimationFrame(loop);
 })();
