@@ -281,6 +281,7 @@ function isAttackState(f) { return inState(f, ATTACK_STATES); }
 
 function specialReady(f) {
   var m = f.charDef.moves.special;
+  if (m.type === 'riposte') return f.riposteReady > 0;
   return m.cooldown ? f.cooldowns.special === 0 : f.meter >= METER_MAX;
 }
 
@@ -318,6 +319,12 @@ function createFighter(charDef, x, facing, controls) {
     groundBounce: false,
     hyperTimer: 0,
     hyperMove: null,
+    riposteReady: 0,
+    counterStacks: 0,
+    counterStackTimer: 0,
+    knockedDown: false,
+    slowTimer: 0,
+    markTimer: 0,
   };
 }
 
@@ -355,9 +362,13 @@ function startAttack(f, type) {
   var mv = f.charDef.moves[type];
   if (mv && mv.adv && f.grounded) f.vx = f.facing * mv.adv;
   // Hopper moves briefly leave the ground mid-attack (unpredictable spacing, dodges low pokes)
-  if (mv && mv.hopper && f.grounded) { f.vy = mv.hopVel || -6; f.grounded = false; }
+  if (mv && mv.hopper && f.grounded) {
+    f.vy = mv.hopRand ? -(4 + Math.random() * 5) : (mv.hopVel || -6);
+    f.grounded = false;
+  }
   if (type === 'special') {
-    if (!f.charDef.moves.special.cooldown) f.meter = 0;
+    if (f.charDef.moves.special.type === 'riposte') f.riposteReady = 0;
+    else if (!f.charDef.moves.special.cooldown) f.meter = 0;
     playSound('special');
   } else if (type === 'fwd_punch') {
     playSound('uppercut');
@@ -406,6 +417,20 @@ function updateFighter(f) {
     if (globalTime % 4 === 0) spawnParticles(f.x + FIGHTER_WIDTH / 2, f.y + FIGHTER_HEIGHT * 0.6, '#ffe066', 1, 2);
     if (f.hyperTimer === 0) { f.hyperMove = null; spawnPopup(f.x + FIGHTER_WIDTH / 2, f.y, 'MÜDE...', '#9fa8c0'); }
   }
+  // Yorick's riposte window: three landed counters arm the Coup de Grâce for a few seconds
+  if (f.riposteReady > 0) {
+    f.riposteReady--;
+    if (globalTime % 5 === 0) spawnParticles(f.x + FIGHTER_WIDTH / 2, f.y + FIGHTER_HEIGHT * 0.4, '#ffd700', 1, 2);
+  }
+  if (f.counterStackTimer > 0) {
+    f.counterStackTimer--;
+    if (f.counterStackTimer === 0) f.counterStacks = 0;
+  }
+  if (f.slowTimer > 0) f.slowTimer--;
+  if (f.markTimer > 0) {
+    f.markTimer--;
+    if (globalTime % 6 === 0) spawnParticles(f.x + FIGHTER_WIDTH / 2, f.y - 6, '#f5d76e', 1, 1);
+  }
   if (f.comboTimer > 0) {
     f.comboTimer--;
     if (f.comboTimer === 0) f.comboCount = 0;
@@ -440,6 +465,7 @@ function updateFighter(f) {
     }
 
     var spdMult = f.hyperTimer > 0 && f.hyperMove ? (f.hyperMove.speedMult || 1) : 1;
+    if (f.slowTimer > 0) spdMult *= 0.5;
     var targetVx = 0;
     if (keys.has(c.left)) targetVx = -f.charDef.stats.speed * spdMult;
     else if (keys.has(c.right)) targetVx = f.charDef.stats.speed * spdMult;
@@ -514,6 +540,12 @@ function updateFighter(f) {
         f.stateTimer = Math.max(f.stateTimer, 20);
         spawnParticles(f.x + FIGHTER_WIDTH / 2, FLOOR_Y, '#ffd166', 12, 6);
         spawnPopup(f.x + FIGHTER_WIDTH / 2, f.y, 'BOUNCE!', '#ffd166');
+      } else if (f.knockedDown && f.state === 'hit') {
+        // Knockdown landing: a heavier thud with a dust cloud
+        f.knockedDown = false;
+        f.vx *= 0.4;
+        spawnParticles(f.x + FIGHTER_WIDTH / 2, FLOOR_Y, '#b0a48c', 14, 4);
+        shake = Math.min(12, shake + 4);
       } else {
         spawnParticles(f.x + FIGHTER_WIDTH / 2, FLOOR_Y, '#888', 5, 2);
         if (f.state === 'jump') f.state = 'idle';
@@ -542,8 +574,11 @@ function updateFighter(f) {
   f.x = Math.max(0, Math.min(CANVAS_W - FIGHTER_WIDTH, f.x));
   if (f.state !== 'hit' && f.state !== 'thrown') f.wallBounced = false;
 
+  // Pass-through moves (Jan's slide) ignore body separation so he can cross underneath
+  var fPass = isAttackState(f) && f.charDef.moves[f.state].passThrough;
+  var oppPass = isAttackState(opp) && opp.charDef.moves[opp.state].passThrough;
   var overlap = FIGHTER_WIDTH - Math.abs(fighter1.x - fighter2.x);
-  if (overlap > 0 && f.grounded) {
+  if (overlap > 0 && f.grounded && !fPass && !oppPass) {
     var pushDir = f.x < opp.x ? -1 : 1;
     f.x += pushDir * overlap * 0.5;
     f.x = Math.max(0, Math.min(CANVAS_W - FIGHTER_WIDTH, f.x));
@@ -551,8 +586,18 @@ function updateFighter(f) {
 
   // Attack state timer
   if (isAttackState(f)) {
+    var preTimer = f.stateTimer;
     f.stateTimer += (f.hyperTimer > 0 && f.hyperMove ? (f.hyperMove.atkSpeedMult || 1) : 1);
     var move = f.charDef.moves[f.state];
+    // Stomp shockwave: the ground impact sends a short tremor along the floor
+    if (move.stompWave && f.grounded && preTimer < move.active[0] && f.stateTimer >= move.active[0]) {
+      projectiles.push({
+        x: f.x + (f.facing > 0 ? FIGHTER_WIDTH : 0), y: FLOOR_Y, vx: 4.5 * f.facing,
+        dmg: 6, knockback: 7, type: 'tremor', owner: f, rotation: 0, life: 26,
+      });
+      spawnParticles(f.x + FIGHTER_WIDTH / 2, FLOOR_Y, '#b0a48c', 10, 4);
+      shake = Math.min(14, shake + 5);
+    }
     var totalFrames = !f.grounded ? Math.round(move.total * 0.7) : move.total;
     if (f.stateTimer >= totalFrames) {
       if (f.state !== 'special' || move.cooldown) {
@@ -632,6 +677,17 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
     finalDmg = Math.round(dmg * (moveFlags.counterMult || 1.5));
     finalKnock *= 1.3;
     stun += 6;
+    if (moveFlags.counterMeter) attacker.meter = Math.min(METER_MAX, attacker.meter + moveFlags.counterMeter);
+  }
+  // Nova's piercing mark: consuming it powers up the hit
+  var markConsumed = false;
+  if (moveFlags.consumeMark && defender.markTimer > 0) {
+    defender.markTimer = 0;
+    markConsumed = true;
+    finalDmg = Math.round(finalDmg * 1.4);
+    spawnPopup(hx, hy - 58, 'MARKE!', '#f5d76e');
+    spawnParticles(hx, hy, '#f5d76e', 12, 5);
+    if (moveFlags.flashOnConsume) flashBurst = Math.max(flashBurst, 0.25);
   }
   // Tip precision: hitting at the far end of a thrust's reach deals bonus damage
   if (moveFlags.tipHit) {
@@ -654,10 +710,17 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
   defender.vx = (moveFlags.pullIn ? -dir * Math.min(finalKnock, 7) : dir * finalKnock);
   if (!defender.grounded) defender.vy = -4.5;
 
-  // Launcher
+  // Launcher (a consumed mark launches noticeably higher)
   if (moveFlags.launcher && defender.grounded) {
-    defender.vy = -8;
+    defender.vy = markConsumed ? -10.5 : -8;
     defender.grounded = false;
+  }
+  // Knockdown: sweep the opponent off their feet — a hard toss with long recovery
+  if (moveFlags.knockdown && !moveFlags.launcher) {
+    if (defender.grounded) { defender.vy = -5; defender.grounded = false; }
+    defender.vx = (moveFlags.pullIn ? -dir : dir) * Math.max(Math.abs(defender.vx), 6);
+    stun = Math.max(stun, 30);
+    defender.knockedDown = true;
   }
   // Ground bounce: mark so the defender pops back up when they land
   if (moveFlags.groundBounce) defender.groundBounce = true;
@@ -681,6 +744,20 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
   if (isCounter) {
     spawnPopup(hx, hy - 40, moveFlags.counterLabel || 'COUNTER!', '#ff8800');
     if (moveFlags.counterLabel) { shake = Math.min(20, shake + 8); spawnParticles(hx, hy, '#ffffff', 14, 6); }
+    // Successful counters stack up; three within the window arm the Coup de Grâce
+    if (attacker.charDef.moves.special.type === 'riposte' && attacker.state !== 'special' && attacker.riposteReady <= 0) {
+      attacker.counterStacks = Math.min(3, (attacker.counterStacks || 0) + 1);
+      attacker.counterStackTimer = 600;
+      var ax = attacker.x + FIGHTER_WIDTH / 2;
+      if (attacker.counterStacks >= 3) {
+        attacker.counterStacks = 0;
+        attacker.riposteReady = 300;
+        spawnPopup(ax, attacker.y - 10, 'EN GARDE!', '#ffd700');
+        spawnParticles(ax, attacker.y + FIGHTER_HEIGHT * 0.4, '#ffd700', 18, 6);
+      } else {
+        spawnPopup(ax, attacker.y - 10, 'KONTER ' + attacker.counterStacks + '/3', '#ffd700');
+      }
+    }
   }
   // Super armor: a defender mid-armored-move tanks through light hits without flinching
   var defenderMove = isAttackState(defender) ? defender.charDef.moves[defender.state] : null;
@@ -710,6 +787,25 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
   if (moveFlags.meterDrain) {
     defender.meter = Math.max(0, defender.meter - moveFlags.meterDrain);
     spawnPopup(hx, hy - 70, 'MÜDE...', '#9fa8c0');
+  }
+
+  // Sleepy contagion: the hit makes the defender sluggish for a while
+  if (moveFlags.slowOnHit) {
+    defender.slowTimer = 120;
+    spawnPopup(hx, hy - 70, 'TRÄGE...', '#9fa8c0');
+  }
+  // Piercing mark: tag the defender for Nova's follow-ups
+  if (moveFlags.applyMark) {
+    defender.markTimer = 180;
+    spawnPopup(hx, hy - 55, 'MARKIERT', '#f5d76e');
+  }
+  // Hit-and-run: the attacker springs back out of range after connecting
+  if (moveFlags.retreat) {
+    attacker.vx = (defender.x > attacker.x ? -1 : 1) * 8;
+  }
+  // Efficiency: landing the hit shaves frames off all of the attacker's cooldowns
+  if (moveFlags.cdRefund) {
+    for (var cdk in attacker.cooldowns) attacker.cooldowns[cdk] = Math.max(0, attacker.cooldowns[cdk] - moveFlags.cdRefund);
   }
 
   // Cross-up: swap sides with the defender and flip both fighters around
@@ -856,7 +952,9 @@ function checkMeleeHit(attacker, defender) {
     launcher: !!move.launcher, knockdown: !!move.knockdown, pullIn: !!move.pullIn, groundBounce: !!move.groundBounce,
     fx: move.fx, counterMult: move.counterMult, counterLabel: move.counterLabel, meterMult: move.meterMult,
     swapPosition: !!move.swapPosition && isFinalHit, lifesteal: move.lifesteal, meterDrain: move.meterDrain,
-    tipBonus: move.tipBonus,
+    tipBonus: move.tipBonus, counterMeter: move.counterMeter, slowOnHit: !!move.slowOnHit,
+    applyMark: !!move.applyMark, consumeMark: !!move.consumeMark, flashOnConsume: !!move.flashOnConsume,
+    retreat: !!move.retreat, cdRefund: move.cdRefund,
   };
 
   // Everything is parriable in this game, including grabs/throws and cinematic supers
@@ -911,6 +1009,7 @@ function checkMeleeHit(attacker, defender) {
       defender.blocking = false;
       attacker.comboCount = attacker.comboTimer > 0 ? attacker.comboCount + 1 : 1;
       attacker.comboTimer = 45;
+      if (move.meterBonus) { attacker.meter = Math.min(METER_MAX, attacker.meter + move.meterBonus); spawnPopup(attacker.x + FIGHTER_WIDTH / 2, attacker.y, '+STIL', '#8c2340'); }
       attacker.meter = Math.min(METER_MAX, attacker.meter + move.dmg * METER_GAIN_ATTACKER);
       defender.meter = Math.min(METER_MAX, defender.meter + move.dmg * METER_GAIN_DEFENDER);
       if (defender.hp <= 0) slowmo = 45;
@@ -923,6 +1022,13 @@ function checkMeleeHit(attacker, defender) {
 
   if (hit && dist <= move.range && globalTime - (attacker.lastHitFrame || -99) >= (move.hitGap || 4)) {
     var airDmg = !attacker.grounded && attacker.state === 'kick' ? Math.round(move.dmg * 0.6) : move.dmg;
+    // Chaos dice damage: rolls fresh within [min,max] on every hit
+    if (move.dmgRand) airDmg = move.dmgRand[0] + Math.floor(Math.random() * (move.dmgRand[1] - move.dmgRand[0] + 1));
+    // Anti-air: punishes an airborne defender extra hard
+    if (move.antiAir && !defender.grounded) {
+      airDmg = Math.round(airDmg * 1.5);
+      spawnPopup(defender.x + FIGHTER_WIDTH / 2, defender.y - 10, 'RUNTER!', '#c0392b');
+    }
     var stunFinal = move.stun || 14;
     // Chaos roll: random bonus effect each time, can't be predicted on press
     if (move.chaosRoll) {
@@ -1012,6 +1118,7 @@ function checkProjectileSpawn(attacker) {
       y: attacker.y + FIGHTER_HEIGHT * 0.35,
       vx: move.speed * attacker.facing,
       dmg: move.dmg, type: move.projectile, owner: attacker, rotation: 0,
+      meterSteal: move.meterSteal || 0,
     });
     attacker.hasHit = true;
   } else if (move.type === 'shockwave') {
@@ -1036,27 +1143,57 @@ function updateProjectiles() {
         var rainbow = ['#ff2d95', '#e8c547', '#00e6c3', '#3b5998', '#9b59b6'];
         spawnParticles(p.x, FLOOR_Y - 40 - Math.random() * 60, rainbow[Math.floor(Math.random() * rainbow.length)], 2, 2);
       }
+    } else if (p.type === 'tremor') {
+      if (globalTime % 2 === 0) spawnParticles(p.x, FLOOR_Y - Math.random() * 14, '#b0a48c', 2, 2);
     } else if (globalTime % 3 === 0) {
       particles.push({ x: p.x, y: p.y, vx: -p.vx * 0.1, vy: (Math.random() - 0.5) * 1, life: 12, maxLife: 12, color: p.type === 'toast' ? '#e6b35c' : '#7f8c8d', size: 3 });
     }
     var target = p.owner === fighter1 ? fighter2 : fighter1;
     var tcx = target.x + FIGHTER_WIDTH / 2;
     var tcy = target.y + FIGHTER_HEIGHT / 2;
-    var hitsTarget = p.type === 'shockwave'
+    var hitsTarget = (p.type === 'shockwave' || p.type === 'tremor')
       ? Math.abs(p.x - tcx) < FIGHTER_WIDTH / 2 + 14
       : Math.abs(p.x - tcx) < FIGHTER_WIDTH / 2 + 12 && Math.abs(p.y - tcy) < FIGHTER_HEIGHT / 2;
-    // Projectile immunity: ducking under incoming fire during the active frames of a marked move
-    var tMove = target.charDef.moves[target.state];
-    var isImmune = tMove && tMove.projectileImmune && target.stateTimer >= tMove.active[0] && target.stateTimer <= tMove.active[1];
-    if (hitsTarget && isImmune) {
+    // Lifespan-limited projectiles (Timo's floor tremor) fade out on their own
+    if (p.life != null) {
+      p.life--;
+      if (p.life <= 0) { projectiles.splice(i, 1); continue; }
+    }
+    // Projectile interactions during a defender's active move frames
+    var tMove = isAttackState(target) ? target.charDef.moves[target.state] : null;
+    var tActive = tMove && tMove.active && target.stateTimer >= tMove.active[0] && target.stateTimer <= tMove.active[1];
+    if (hitsTarget && tMove && tActive && tMove.projectileImmune) {
       spawnParticles(p.x, p.y, '#9fd3ff', 4, 2);
       continue;
     }
+    // Deflect: the spinning blade shreds the projectile outright
+    if (hitsTarget && tMove && tActive && tMove.deflect) {
+      spawnParticles(p.x, p.y, '#d0d0d8', 12, 5);
+      spawnPopup(p.x, p.y - 20, 'ZERSCHLAGEN!', '#d0d0d8');
+      playSound('slash');
+      projectiles.splice(i, 1);
+      continue;
+    }
+    // Reflect: the kick returns the projectile to its sender
+    if (hitsTarget && tMove && tActive && tMove.reflect && p.owner !== target) {
+      p.owner = target;
+      p.vx = -p.vx;
+      spawnPopup(p.x, p.y - 20, 'RETOUR!', '#d4b84a');
+      playSound('parry');
+      continue;
+    }
     if (hitsTarget) {
-      var pColor = p.type === 'toast' ? '#e6b35c' : (p.type === 'shockwave' ? '#e8c547' : (p.type === 'flash' ? '#fff7cc' : '#3498db'));
+      var pColor = p.type === 'toast' ? '#e6b35c' : (p.type === 'shockwave' ? '#e8c547' : (p.type === 'tremor' ? '#b0a48c' : (p.type === 'flash' ? '#fff7cc' : '#3498db')));
       var pStun = p.type === 'flash' ? 30 : 14;
       applyDamage(target, p.dmg, p.owner, p.type === 'shockwave' ? (p.knockback || 9) : (p.type === 'flash' ? 4 : 8), false, pStun, false, true);
       if (p.type === 'flash') { target.stunned = true; flashBurst = 0.7; spawnPopup(target.x + FIGHTER_WIDTH / 2, target.y, 'GEBLENDET!', '#fff7cc'); }
+      // Data theft: the laptop siphons special meter from the target to its owner
+      if (p.meterSteal) {
+        var stolen = Math.min(target.meter, p.meterSteal);
+        target.meter -= stolen;
+        p.owner.meter = Math.min(METER_MAX, p.owner.meter + stolen);
+        spawnPopup(target.x + FIGHTER_WIDTH / 2, target.y - 24, 'DATEN GEKLAUT!', '#4fc3f7');
+      }
       spawnParticles(target.x + FIGHTER_WIDTH / 2, target.y + FIGHTER_HEIGHT / 2, pColor, 16, 6);
       projectiles.splice(i, 1);
       continue;
@@ -1193,7 +1330,9 @@ function resetFightersForRound() {
     f.cooldowns = { punch: 0, kick: 0, fwd_punch: 0, fwd_kick: 0, special: 0, parry: 0 };
     f.meter = 0; f.parryStunned = false; f.stunned = false; f.blocking = false;
     f.grounded = true; f.comboCount = 0; f.comboTimer = 0; f.airAttacked = false;
-    f.hyperTimer = 0; f.hyperMove = null;
+    f.hyperTimer = 0; f.hyperMove = null; f.riposteReady = 0;
+    f.counterStacks = 0; f.counterStackTimer = 0; f.knockedDown = false;
+    f.slowTimer = 0; f.markTimer = 0;
   });
   projectiles = []; particles = []; popups = [];
   roundTimer = 99; history = []; rewindEffect = 0; rewindGhosts = []; slowmo = 0;
@@ -1431,6 +1570,41 @@ function drawFighter(f) {
     ctx.fillText('WACH: ' + secs + 's', f.x + FIGHTER_WIDTH / 2, f.y - 14);
     ctx.restore();
   }
+
+  if (f.riposteReady > 0) {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 13px monospace';
+    var pulse = 0.6 + 0.4 * Math.sin(globalTime * 0.3);
+    ctx.globalAlpha = pulse;
+    ctx.fillStyle = '#ffd700';
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
+    ctx.strokeText('EN GARDE!', f.x + FIGHTER_WIDTH / 2, f.y - 14);
+    ctx.fillText('EN GARDE!', f.x + FIGHTER_WIDTH / 2, f.y - 14);
+    ctx.restore();
+  }
+
+  // Nova's piercing mark: golden diamond hovering over the tagged fighter
+  if (f.markTimer > 0) {
+    ctx.save();
+    var mx = f.x + FIGHTER_WIDTH / 2, my = f.y - 24 + Math.sin(globalTime * 0.15) * 3;
+    ctx.globalAlpha = Math.min(1, f.markTimer / 40);
+    ctx.fillStyle = '#f5d76e';
+    ctx.beginPath();
+    ctx.moveTo(mx, my - 7); ctx.lineTo(mx + 5, my); ctx.lineTo(mx, my + 7); ctx.lineTo(mx - 5, my);
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  // Sluggish: drowsy Zzz drifting up
+  if (f.slowTimer > 0) {
+    ctx.save();
+    ctx.font = 'bold 14px monospace';
+    ctx.fillStyle = 'rgba(159,168,192,0.8)';
+    ctx.fillText('z', f.x + FIGHTER_WIDTH - 6, f.y - 8 - (globalTime % 30) * 0.4);
+    ctx.fillText('Z', f.x + FIGHTER_WIDTH + 4, f.y - 18 - (globalTime % 30) * 0.3);
+    ctx.restore();
+  }
 }
 
 function drawParticles() {
@@ -1476,21 +1650,25 @@ function drawHealthBar(x, f, flip) {
   ctx.fillText(f.charDef.name, flip ? x + w : x, 16);
 
   var specMove = f.charDef.moves.special;
+  var usesRiposte = specMove.type === 'riposte';
   var usesCooldown = !!specMove.cooldown;
-  var ready = usesCooldown ? f.cooldowns.special === 0 : f.meter >= METER_MAX;
-  var fillPct = usesCooldown ? (1 - f.cooldowns.special / specMove.cooldown) : (f.meter / METER_MAX);
+  var ready = usesRiposte ? f.riposteReady > 0 : (usesCooldown ? f.cooldowns.special === 0 : f.meter >= METER_MAX);
+  var fillPct = usesRiposte ? (f.riposteReady > 0 ? f.riposteReady / 300 : f.counterStacks / 3) : (usesCooldown ? (1 - f.cooldowns.special / specMove.cooldown) : (f.meter / METER_MAX));
   var barW = 160, barY = 52;
   var bx = flip ? x + w - barW : x;
   ctx.fillStyle = '#222';
   ctx.fillRect(bx, barY, barW, 8);
-  ctx.fillStyle = ready ? '#ffcc00' : '#666';
+  ctx.fillStyle = ready ? (usesRiposte ? '#ffd700' : '#ffcc00') : '#666';
   if (flip) ctx.fillRect(bx + barW * (1 - fillPct), barY, barW * fillPct, 8);
   else ctx.fillRect(bx, barY, barW * fillPct, 8);
   ctx.strokeStyle = '#888'; ctx.lineWidth = 1;
   ctx.strokeRect(bx, barY, barW, 8);
   ctx.fillStyle = ready ? '#ffcc00' : '#999';
   ctx.font = '11px monospace';
-  ctx.fillText(ready ? '★ ' + specMove.name + ' BEREIT' : specMove.name, flip ? x + w : x, barY + 20);
+  var label = ready ? '★ ' + specMove.name + ' BEREIT'
+    : usesRiposte ? specMove.name + ' (' + f.counterStacks + '/3 Konter)'
+    : specMove.name;
+  ctx.fillText(label, flip ? x + w : x, barY + 20);
 }
 
 function drawHUD() {
@@ -2259,6 +2437,30 @@ window.__sfDebug = {
   },
   state: function () { return { f1: { x: fighter1.x, state: fighter1.state, hp: fighter1.hp }, f2: { x: fighter2.x, state: fighter2.state, hp: fighter2.hp } }; },
   meterTest: function (n) { fighter1.meter = 0; for (var i = 0; i < n; i++) update(); return { meter: fighter1.meter }; },
+  landCounter: function () {
+    // Yorick(f1) lands one counter on Max(f2) via the feint
+    fighter1.x = 430; fighter2.x = 540; fighter1.facing = 1; fighter2.facing = -1;
+    fighter2.hp = 100; fighter2.state = 'idle'; fighter2.stateTimer = 0; fighter2.grounded = true; fighter2.y = GROUND_Y;
+    fighter1.state = 'idle'; fighter1.stateTimer = 0; fighter1.grounded = true; fighter1.y = GROUND_Y;
+    startAttack(fighter1, 'fwd_punch');
+    for (var i = 0; i < 4; i++) update();
+    startAttack(fighter2, 'kick');
+    for (var j = 0; j < 5; j++) update();
+    return { stacks: fighter1.counterStacks, riposte: fighter1.riposteReady, ready: specialReady(fighter1), f2hp: fighter2.hp, f2state: fighter2.state, stackTimer: fighter1.counterStackTimer };
+  },
+  riposteTest: function () {
+    window.__sfDebug.toFight(6, 0);
+    var s1 = window.__sfDebug.landCounter();
+    var s2 = window.__sfDebug.landCounter();
+    var s3 = window.__sfDebug.landCounter();
+    for (var k = 0; k < 20; k++) update();
+    var hpBefore = fighter2.hp;
+    fighter1.x = 430; fighter2.x = 540; fighter1.facing = 1;
+    fighter1.state = 'idle'; fighter1.stateTimer = 0;
+    startAttack(fighter1, 'special');
+    for (var m2 = 0; m2 < 22; m2++) update();
+    return { afterC1: s1, afterC2: s2, afterC3: s3, specialDmg: hpBefore - fighter2.hp, riposteAfterUse: fighter1.riposteReady };
+  },
   parryVsGrab: function () {
     fighter1.x = 460; fighter2.x = 540; fighter1.facing = 1; fighter2.facing = -1;
     startAttack(fighter2, 'parry');

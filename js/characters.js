@@ -69,6 +69,17 @@ function drawHumanoid(ctx, w, h, fighter, palette, accessories) {
   const atkMove = (isArmAtk || isLegAtk) ? fighter.charDef.moves[state] : null;
   const atkAnim = atkMove ? (atkMove.anim || (isLegAtk ? 'straightkick' : 'straight')) : null;
 
+  // Shared attack phasing: windup (coil back) -> active (strike) -> recovery (retract)
+  let AKw = 0, AKs = 0, AKr = 0;
+  if (atkMove && atkMove.active) {
+    const _a0 = atkMove.active[0], _a1 = atkMove.active[1];
+    const _tot = airborne ? Math.round(atkMove.total * 0.7) : atkMove.total;
+    const _st = fighter.stateTimer;
+    if (_st < _a0) AKw = _st / _a0;
+    else if (_st <= _a1) AKs = (_st - _a0) / Math.max(1, _a1 - _a0);
+    else AKr = Math.min(1, (_st - _a1) / Math.max(1, _tot - _a1));
+  }
+
 
   if (isKO) {
     ctx.save();
@@ -99,7 +110,8 @@ function drawHumanoid(ctx, w, h, fighter, palette, accessories) {
   }
 
   let bob = 0, legSwing = 0, armSwing = 0;
-  if (state === 'idle') bob = Math.sin(t * 0.07) * 2.2;
+  // classic fighting-stance bounce: quick rhythmic hops on the spot
+  if (state === 'idle') bob = -Math.abs(Math.sin(t * 0.13)) * 3.5;
   if (state === 'walk') {
     bob = Math.abs(Math.sin(t * 0.18)) * 3;
     legSwing = Math.sin(t * 0.18) * 11;
@@ -111,6 +123,10 @@ function drawHumanoid(ctx, w, h, fighter, palette, accessories) {
 
   ctx.translate(0, bob);
 
+  // subtle life: breathing sway while idle, forward lean while walking
+  if (state === 'idle') ctx.transform(1, 0, Math.sin(t * 0.05) * 0.012, 1, 0, 0);
+  if (state === 'walk') ctx.transform(1, 0, 0.035, 1, 0, 0);
+
   if (isHit) {
     ctx.transform(1, 0, 0.08, 1, -0.08 * h, 0);
     ctx.translate(Math.sin(t * 1.4) * 2.5, 0);
@@ -121,12 +137,16 @@ function drawHumanoid(ctx, w, h, fighter, palette, accessories) {
       var lunge = Math.min(fighter.stateTimer * 1.5, lungeMax);
       ctx.translate(lunge, 0);
     }
-    // forward body lean for committed attacks
-    var lean = 0.04;
-    if (atkAnim === 'overhead' || atkAnim === 'axekick') lean = -0.03;
-    else if (atkAnim === 'uppercut') lean = -0.05;
-    else if (atkAnim === 'dashpunch' || atkAnim === 'dashkick') lean = 0.08;
-    ctx.transform(1, 0, lean, 1, 0, 0);
+    // per-archetype commit lean
+    var lean = 0.05;
+    if (atkAnim === 'overhead' || atkAnim === 'axekick' || atkAnim === 'brushkick' || atkAnim === 'stomp') lean = -0.04;
+    else if (atkAnim === 'uppercut' || atkAnim === 'chaosupper' || atkAnim === 'risingflash') lean = -0.06;
+    else if (atkAnim === 'dashpunch' || atkAnim === 'dashkick' || atkAnim === 'lowslide' || atkAnim === 'bladethrust' || atkAnim === 'runwaykick' || atkAnim === 'lungethrust') lean = 0.10;
+    // body english: coil back + dip during windup, drive forward on the strike, ease out in recovery
+    var inWind = AKw > 0 && AKs === 0 && AKr === 0 && fighter.stateTimer < atkMove.active[0];
+    var drive = inWind ? -0.5 * AKw : (AKr > 0 ? 1 - Math.pow(AKr, 1.3) : 1);
+    ctx.translate(4 * Math.max(0, drive), inWind ? 2.5 * AKw : -1.5 * Math.max(0, drive));
+    ctx.transform(1, 0, lean * drive, 1, 0, 0);
   }
   if (airborne && !isThrown) {
     let rot = 0.06;
@@ -151,6 +171,12 @@ function drawHumanoid(ctx, w, h, fighter, palette, accessories) {
     backFoot = { x: cx - w * 0.18, y: h * 0.82 };
     frontFoot = { x: cx + w * 0.20, y: h * 0.86 };
   }
+  // idle bounce: heels lift alternately with the hop rhythm
+  if (state === 'idle' && !airborne) {
+    backFoot.y -= Math.max(0, Math.sin(t * 0.13)) * 2.5;
+    frontFoot.y -= Math.max(0, -Math.sin(t * 0.13)) * 2.5;
+  }
+  const nFfx = frontFoot.x, nFfy = frontFoot.y, nBfx = backFoot.x, nBfy = backFoot.y;
   if (isLegAtk && atkMove.type === 'grab') {
     // Hand/chain throws keyed to the kick button don't use a kicking leg — keep a neutral stance
   } else if (isLegAtk) {
@@ -178,10 +204,21 @@ function drawHumanoid(ctx, w, h, fighter, palette, accessories) {
         frontFoot = { x: cx + w * 0.26, y: hipY - h * 0.50 + q * h * 0.62 };
       }
       backFoot = { x: cx - w * 0.18, y: footY };
-    } else if (atkAnim === 'sweep') {
-      const ext = Math.min(st * 4.0, w * 0.78);
-      frontFoot = { x: cx + w * 0.20 + ext, y: h - h * 0.015 };
-      backFoot = { x: cx - w * 0.18, y: footY };
+    } else if (atkAnim === 'bigsweep') {
+      // heavy, slow foot-drag sweep — reaches further than a normal sweep but builds up slower
+      const ext = Math.min(Math.max(0, st - 2) * 3.0, w * 0.9);
+      frontFoot = { x: cx + w * 0.18 + ext, y: h - h * 0.01 };
+      backFoot = { x: cx - w * 0.22, y: footY };
+    } else if (atkAnim === 'charleston') {
+      // jaunty two-beat dance kick: front foot flicks out, retracts, flicks again
+      const beat = Math.sin(st * 0.45);
+      frontFoot = { x: cx + w * 0.28 + Math.abs(beat) * w * 0.5, y: hipY + h * 0.05 - beat * h * 0.06 };
+      backFoot = { x: cx - w * 0.20 - Math.max(0, -beat) * w * 0.12, y: footY };
+    } else if (atkAnim === 'canehook') {
+      // cane does the work down low; the legs just brace with a small forward step
+      const step = Math.min(st * 1.5, w * 0.18);
+      frontFoot = { x: cx + w * 0.22 + step, y: footY };
+      backFoot = { x: cx - w * 0.24, y: footY };
     } else if (atkAnim === 'knee') {
       const pr = Math.min(1, st / 6);
       frontFoot = { x: cx + w * 0.16 + pr * w * 0.08, y: hipY + h * 0.06 - pr * h * 0.04 };
@@ -190,6 +227,53 @@ function drawHumanoid(ctx, w, h, fighter, palette, accessories) {
       const ext = Math.min(st * 4.2, w * 0.92);
       frontFoot = { x: cx + w * 0.25 + ext, y: hipY + h * 0.10 };
       backFoot = { x: cx - w * 0.22, y: footY };
+    } else if (atkAnim === 'legreap') {
+      // judo reap: the leg sweeps up from behind-low, across, and through (O-soto-gari)
+      const pr = Math.min(1, st / 16);
+      const ang = -0.6 + pr * 2.0;
+      frontFoot = { x: cx + Math.cos(ang) * w * 0.62, y: hipY + h * 0.10 + Math.sin(ang) * h * 0.18 };
+      backFoot = { x: cx - w * 0.12, y: footY };
+    } else if (atkAnim === 'crossspin') {
+      // grounded cross-spin: legs cross low and horizontal, distinct from a high whip kick
+      const ang = Math.min(st * 0.20, Math.PI * 1.3) - 0.2;
+      frontFoot = { x: cx + Math.cos(ang) * w * 0.60, y: hipY + h * 0.14 + Math.abs(Math.sin(ang)) * h * 0.06 };
+      backFoot = { x: cx - Math.cos(ang) * w * 0.22, y: footY };
+    } else if (atkAnim === 'lowslide') {
+      // near-ground sliding kick, both legs skim the floor
+      const ext = Math.min(st * 4.5, w * 1.0);
+      frontFoot = { x: cx + w * 0.25 + ext, y: h - h * 0.01 };
+      backFoot = { x: cx - w * 0.28, y: h - h * 0.01 };
+    } else if (atkAnim === 'brushkick') {
+      // wide arcing roundhouse, higher and rounder than an axe-drop
+      const ang = Math.min(st * 0.16, Math.PI * 0.85) - 0.5;
+      frontFoot = { x: cx + Math.cos(ang) * w * 0.66, y: hipY - h * 0.02 + Math.sin(ang) * h * 0.28 };
+      backFoot = { x: cx - w * 0.16, y: footY };
+    } else if (atkAnim === 'wobblekick') {
+      // erratic mid-air flail while the chaos-hop keeps him airborne
+      const wob = Math.sin(st * 0.6) * w * 0.3;
+      frontFoot = { x: cx + w * 0.30 + wob, y: hipY + h * 0.14 + Math.cos(st * 0.5) * h * 0.05 };
+      backFoot = { x: cx - w * 0.20 - wob * 0.4, y: hipY + h * 0.22 };
+    } else if (atkAnim === 'stomp') {
+      // heavy vertical stomp: slower and more grounded than the axe-kick drop
+      const pr = Math.min(1, st / 16);
+      if (pr < 0.6) {
+        const q = pr / 0.6;
+        frontFoot = { x: cx + w * 0.16, y: hipY - q * h * 0.62 };
+      } else {
+        const q = (pr - 0.6) / 0.4;
+        frontFoot = { x: cx + w * 0.30, y: hipY - h * 0.62 + q * h * 0.68 };
+      }
+      backFoot = { x: cx - w * 0.20, y: footY };
+    } else if (atkAnim === 'photospin') {
+      // high whip spin kick, leg extends well above waist
+      const ang = Math.min(st * 0.19, Math.PI * 1.15) - 0.4;
+      frontFoot = { x: cx + Math.cos(ang) * w * 0.78, y: hipY - h * 0.04 + Math.sin(ang) * h * 0.22 };
+      backFoot = { x: cx - w * 0.14, y: footY };
+    } else if (atkAnim === 'runwaykick') {
+      // long strutting lunge kick at hip height, catwalk silhouette
+      const ext = Math.min(st * 4.6, w * 1.0);
+      frontFoot = { x: cx + w * 0.24 + ext, y: hipY + h * 0.06 };
+      backFoot = { x: cx - w * 0.20, y: footY };
     } else { // straightkick
       const ext = Math.min(st * 3.2, w * 0.70);
       frontFoot = { x: cx + w * 0.25 + ext, y: hipY + h * (isFwdKick ? 0.15 : 0.10) };
@@ -200,18 +284,41 @@ function drawHumanoid(ctx, w, h, fighter, palette, accessories) {
     backFoot.x = cx - w * 0.30;
     frontFoot.x = cx + w * 0.30;
   }
+  if (atkAnim === 'lungethrust') {
+    // fencing lunge stance: front leg drives forward and bends, back leg stretches out straight
+    const pr = Math.min(1, fighter.stateTimer / 10);
+    frontFoot = { x: cx + w * 0.20 + pr * w * 0.30, y: footY };
+    backFoot = { x: cx - w * 0.34 - pr * w * 0.06, y: footY };
+  }
   let frontFist = { x: cx + w * 0.30, y: shoulderY + h * 0.02 };
   let backFist = { x: cx + w * 0.10, y: shoulderY + h * 0.08 };
   if (state === 'walk') {
     frontFist.y += armSwing * 0.5;
     backFist.y -= armSwing * 0.5;
   }
+  // idle bounce: fists pump lightly in counter-rhythm to the hops
+  if (state === 'idle') {
+    frontFist.y += Math.sin(t * 0.26) * 1.8;
+    backFist.y -= Math.sin(t * 0.26) * 1.8;
+  }
+  const nFFx = frontFist.x, nFFy = frontFist.y, nBFx = backFist.x, nBFy = backFist.y;
   if (isArmAtk) {
     const st = fighter.stateTimer;
     if (atkAnim === 'jab') {
       const ext = Math.min(st * 6.0, w * 0.50);
       frontFist = { x: cx + w * 0.28 + ext, y: shoulderY + h * 0.02 };
       backFist = { x: cx + w * 0.06, y: shoulderY + h * 0.07 };
+    } else if (atkAnim === 'slap') {
+      // open-hand backhand: winds up across the chest, then sweeps outward in an arc
+      const pr = Math.min(1, st / 6);
+      if (pr < 0.35) {
+        const q = pr / 0.35;
+        frontFist = { x: cx + w * 0.14 - q * w * 0.16, y: shoulderY - h * 0.03 };
+      } else {
+        const q = (pr - 0.35) / 0.65;
+        frontFist = { x: cx - w * 0.02 + q * w * 0.70, y: shoulderY - h * 0.03 + Math.sin(q * Math.PI) * h * 0.05 };
+      }
+      backFist = { x: cx + w * 0.06, y: shoulderY + h * 0.08 };
     } else if (atkAnim === 'uppercut') {
       const pr = Math.min(1, st / 8);
       frontFist = { x: cx + w * 0.20 + pr * w * 0.22, y: shoulderY + h * 0.18 - pr * h * 0.55 };
@@ -235,6 +342,71 @@ function drawHumanoid(ctx, w, h, fighter, palette, accessories) {
       const ext = Math.min(st * 3.5, w * 0.55);
       frontFist = { x: cx + w * 0.25 + ext, y: shoulderY + h * 0.05 };
       backFist = { x: cx + w * 0.18 + ext * 0.8, y: shoulderY + h * 0.12 };
+    } else if (atkAnim === 'judochop') {
+      // open-hand chop, diagonal down-forward
+      const pr = Math.min(1, st / 7);
+      frontFist = { x: cx + w * 0.10 + pr * w * 0.42, y: shoulderY - h * 0.10 + pr * h * 0.16 };
+      backFist = { x: cx + w * 0.02, y: shoulderY + h * 0.05 };
+    } else if (atkAnim === 'judogrip') {
+      // judo grip-and-pull: both hands lunge out to grab the lapel/collar
+      const ext = Math.min(st * 3.5, w * 0.55);
+      frontFist = { x: cx + w * 0.25 + ext, y: shoulderY + h * 0.05 };
+      backFist = { x: cx + w * 0.18 + ext * 0.8, y: shoulderY + h * 0.12 };
+    } else if (atkAnim === 'snapjab') {
+      // quick short jab with a tiny feint dip before the extension
+      const pr = Math.min(1, st / 5);
+      const dip = pr < 0.3 ? Math.sin(pr / 0.3 * Math.PI) * h * 0.02 : 0;
+      frontFist = { x: cx + w * 0.26 + Math.min(st * 7.0, w * 0.46), y: shoulderY + h * 0.02 + dip };
+      backFist = { x: cx + w * 0.05, y: shoulderY + h * 0.06 };
+    } else if (atkAnim === 'paintjab') {
+      // alternating double-fist splash motion
+      const cyc = st % 12;
+      const ext = Math.min(cyc * 8.0, w * 0.5);
+      if (Math.floor(st / 12) % 2 === 0) {
+        frontFist = { x: cx + w * 0.26 + ext, y: shoulderY };
+        backFist = { x: cx + w * 0.04, y: shoulderY + h * 0.09 };
+      } else {
+        backFist = { x: cx + w * 0.02 + ext * 0.8, y: shoulderY + h * 0.10 };
+        frontFist = { x: cx + w * 0.20, y: shoulderY - h * 0.02 };
+      }
+    } else if (atkAnim === 'chaosupper') {
+      // erratic rising punch with horizontal jitter
+      const pr = Math.min(1, st / 8);
+      const jitter = Math.sin(st * 0.9) * w * 0.05;
+      frontFist = { x: cx + w * 0.18 + pr * w * 0.24 + jitter, y: shoulderY + h * 0.16 - pr * h * 0.50 };
+      backFist = { x: cx + w * 0.02, y: shoulderY + h * 0.05 };
+    } else if (atkAnim === 'lazyswing') {
+      // slow heavy roundhouse-style swing
+      const pr = Math.min(1, st / 11);
+      const ang = -0.9 + pr * 1.5;
+      frontFist = { x: cx + w * 0.05 + Math.cos(ang) * w * 0.5, y: shoulderY + Math.sin(ang) * h * 0.10 };
+      backFist = { x: cx + w * 0.02, y: shoulderY + h * 0.06 };
+    } else if (atkAnim === 'buckleswing') {
+      // quick backhand buckle strike, flicks slightly upward
+      const pr = Math.min(1, st / 6);
+      frontFist = { x: cx + w * 0.22 + pr * w * 0.42, y: shoulderY + h * 0.06 - pr * h * 0.10 };
+      backFist = { x: cx + w * 0.04, y: shoulderY + h * 0.06 };
+    } else if (atkAnim === 'bladethrust') {
+      // fencing thrust, lower and straighter than a jab
+      const ext = Math.min(st * 6.5, w * 0.62);
+      frontFist = { x: cx + w * 0.28 + ext, y: shoulderY + h * 0.09 };
+      backFist = { x: cx - w * 0.02, y: shoulderY + h * 0.02 };
+    } else if (atkAnim === 'flashjab') {
+      // quick jab with a wrist-flick pop at the end
+      const pr = Math.min(1, st / 5);
+      const pop = pr > 0.7 ? (pr - 0.7) / 0.3 * h * 0.02 : 0;
+      frontFist = { x: cx + w * 0.28 + pr * w * 0.48, y: shoulderY + h * 0.02 - pop };
+      backFist = { x: cx + w * 0.05, y: shoulderY + h * 0.06 };
+    } else if (atkAnim === 'risingflash') {
+      // uppercut leaning further back with a flash pop at the top
+      const pr = Math.min(1, st / 8);
+      frontFist = { x: cx + w * 0.16 + pr * w * 0.26, y: shoulderY + h * 0.20 - pr * h * 0.60 };
+      backFist = { x: cx - w * 0.02, y: shoulderY + h * 0.06 };
+    } else if (atkAnim === 'lungethrust') {
+      // fencing lunge: cane/arm drives far forward and low, fully committed
+      const ext = Math.min(st * 7.0, w * 0.85);
+      frontFist = { x: cx + w * 0.30 + ext, y: shoulderY + h * 0.03 };
+      backFist = { x: cx - w * 0.08, y: shoulderY + h * 0.02 };
     } else { // straight
       const ext = Math.min(st * 4.0, w * (isFwdPunch ? 0.72 : 0.65));
       frontFist = { x: cx + w * 0.28 + ext, y: shoulderY + h * (isFwdPunch ? 0.08 : 0.03) };
@@ -245,6 +417,27 @@ function drawHumanoid(ctx, w, h, fighter, palette, accessories) {
     frontFist = { x: cx + w * 0.20, y: shoulderY + h * 0.02 };
     backFist = { x: cx + w * 0.06, y: shoulderY + h * 0.06 };
   }
+
+  // Shared anticipation & follow-through for every normal attack:
+  // limbs coil toward the body during windup, then blend back to neutral during recovery
+  if (atkMove && !isThrown) {
+    if (AKw > 0 && AKs === 0 && AKr === 0 && fighter.stateTimer < atkMove.active[0]) {
+      const ck = AKw * 0.55;
+      const coilX = cx + w * 0.04, coilY = shoulderY + h * 0.05;
+      frontFist.x += (coilX - frontFist.x) * ck;
+      frontFist.y += (coilY - frontFist.y) * ck;
+      if (isLegAtk && !airborne && atkMove.type !== 'grab') {
+        frontFoot.x += ((cx + w * 0.10) - frontFoot.x) * ck;
+      }
+    } else if (AKr > 0) {
+      const rk = Math.pow(AKr, 1.4) * 0.85;
+      frontFist.x += (nFFx - frontFist.x) * rk; frontFist.y += (nFFy - frontFist.y) * rk;
+      backFist.x += (nBFx - backFist.x) * rk; backFist.y += (nBFy - backFist.y) * rk;
+      frontFoot.x += (nFfx - frontFoot.x) * rk; frontFoot.y += (nFfy - frontFoot.y) * rk;
+      backFoot.x += (nBfx - backFoot.x) * rk; backFoot.y += (nBfy - backFoot.y) * rk;
+    }
+  }
+
   if (isWin) frontFist = { x: cx + w * 0.18, y: -h * 0.06 };
   if (isParry) {
     const prog = Math.min(1, fighter.stateTimer / 6);
@@ -261,6 +454,11 @@ function drawHumanoid(ctx, w, h, fighter, palette, accessories) {
       const ext = Math.min(fighter.stateTimer * 3.5, w * 0.55);
       frontFist = { x: cx + w * 0.25 + ext, y: shoulderY + h * 0.05 };
       backFist = { x: cx + w * 0.18 + ext * 0.8, y: shoulderY + h * 0.12 };
+    } else if (m.type === 'riposte') {
+      // committed fencing thrust: draw arm/cane forward
+      const ext = Math.min(fighter.stateTimer * 4.5, w * 0.9);
+      frontFist = { x: cx + w * 0.28 + ext, y: shoulderY + h * 0.05 };
+      backFist = { x: cx - w * 0.02, y: shoulderY + h * 0.02 };
     } else if (m.type === 'projectile') {
       const prog = Math.min(1, fighter.stateTimer / m.active[0]);
       frontFist = {
@@ -419,10 +617,10 @@ const CHARACTERS = [
     palette: { skin: '#caa07a', hair: '#2b1c12', primary: '#f2ede1', secondary: '#e3dccb', accent: '#c0392b', outline: '#2a2520' },
     stats: { speed: 2.0, jumpVel: -10.4, health: 100 },
     moves: {
-      punch: { name: 'Konter-Jab', anim: 'jab', dmg: 5, range: 115, total: 16, active: [4, 8], cooldown: 14, knockback: 3, fx: '#f2ede1' },
-      kick: { name: 'Clinch-Knie', anim: 'knee', dmg: 10, range: 95, total: 18, active: [4, 9], cooldown: 16, knockback: 2, pullIn: true, fx: '#c0392b' },
-      fwd_punch: { name: 'Hüft-Wurf', anim: 'grabreach', type: 'grab', dmg: 13, range: 100, total: 26, active: [6, 13], cooldown: 30, knockback: 0, throwTotal: 20, throwDist: 1.15, fx: '#e3dccb' },
-      fwd_kick: { name: 'O-Soto-Gari', anim: 'sweep', dmg: 13, range: 160, total: 34, active: [12, 20], cooldown: 32, knockback: 5, knockdown: true, stun: 24, fx: '#caa07a' },
+      punch: { name: 'Gi-Ruck', anim: 'judochop', dmg: 4, range: 118, total: 16, active: [4, 8], cooldown: 14, knockback: 3, pullIn: true, fx: '#f2ede1' },
+      kick: { name: 'Ippon-Knie', anim: 'knee', dmg: 10, range: 98, total: 18, active: [4, 9], cooldown: 16, knockback: 3, antiAir: true, fx: '#c0392b' },
+      fwd_punch: { name: 'Seoi-Nage', anim: 'judogrip', type: 'grab', dmg: 13, range: 100, total: 26, active: [6, 13], cooldown: 30, knockback: 0, throwTotal: 22, throwDist: -1.3, fx: '#e3dccb' },
+      fwd_kick: { name: 'Ashi-Barai', anim: 'legreap', dmg: 12, range: 155, total: 34, active: [12, 20], cooldown: 32, knockback: 3, knockdown: true, pullIn: true, stun: 26, fx: '#caa07a' },
       special: { name: 'Judo-Wurf', dmg: 22, range: 125, total: 36, active: [8, 18], knockback: 20, stun: 30, type: 'grab' },
     },
     draw(ctx, fighter, w, h) {
@@ -464,11 +662,11 @@ const CHARACTERS = [
     palette: { skin: '#e3b98f', hair: '#d4b84a', primary: '#111111', secondary: '#1a1a1a', accent: '#ffffff', outline: '#0a0a0a' },
     stats: { speed: 1.8, jumpVel: -10, health: 100 },
     moves: {
-      punch: { name: 'Zweifel-Tipp', anim: 'jab', dmg: 4, hits: 2, hitGap: 6, range: 118, total: 20, active: [4, 14], cooldown: 16, knockback: 2, meterMult: 1.8, fx: '#ffffff' },
-      kick: { name: 'Konter-Spin', anim: 'spinkick', dmg: 7, hits: 2, hitGap: 6, range: 115, total: 30, active: [12, 20], cooldown: 30, knockback: 8, swapPosition: true, fx: '#d4b84a' },
-      fwd_punch: { name: 'Konter-These', anim: 'dashpunch', dmg: 8, range: 130, total: 24, active: [7, 13], cooldown: 26, knockback: 5, counterMult: 2.6, counterLabel: 'KONTER-THESE!', fx: '#ffffff' },
-      fwd_kick: { name: 'Status-Quo-Brecher', anim: 'dashkick', dmg: 11, range: 165, total: 32, active: [11, 20], cooldown: 28, knockback: 9, adv: 10, lunge: 24, projectileImmune: true, fx: '#d4b84a' },
-      special: { name: 'Laptop-Wurf', dmg: 14, range: 999, total: 30, active: [10, 12], type: 'projectile', projectile: 'laptop', speed: 9 },
+      punch: { name: 'Effizienz-Tipp', anim: 'snapjab', dmg: 4, hits: 2, hitGap: 6, range: 118, total: 20, active: [4, 14], cooldown: 16, knockback: 2, cdRefund: 10, fx: '#ffffff' },
+      kick: { name: 'Retourkutsche', anim: 'crossspin', dmg: 8, range: 120, total: 30, active: [8, 22], cooldown: 28, knockback: 8, reflect: true, fx: '#d4b84a' },
+      fwd_punch: { name: 'Konter-These', anim: 'dashpunch', dmg: 8, range: 130, total: 24, active: [7, 13], cooldown: 26, knockback: 5, counterMult: 2.6, counterLabel: 'KONTER-THESE!', counterMeter: 30, fx: '#ffffff' },
+      fwd_kick: { name: 'Unterwanderung', anim: 'lowslide', dmg: 10, range: 150, total: 32, active: [11, 20], cooldown: 28, knockback: 6, adv: 13, lunge: 24, projectileImmune: true, passThrough: true, fx: '#d4b84a' },
+      special: { name: 'Laptop-Diebstahl', dmg: 14, range: 999, total: 30, active: [10, 12], type: 'projectile', projectile: 'laptop', speed: 11, meterSteal: 15 },
     },
     draw(ctx, fighter, w, h) {
       drawHumanoid(ctx, w, h, fighter, this.palette, ({ w, h, cx, headR, torsoY, torsoH }) => {
@@ -514,6 +712,49 @@ const CHARACTERS = [
         ctx.lineTo(cx + headR * 0.6, headR * 0.6);
         ctx.quadraticCurveTo(cx + headR * 0.1, headR * 0.15, cx - headR * 0.2, headR * 0.4);
         ctx.closePath(); ctx.fill();
+        // bright strand highlights in the fringe
+        ctx.strokeStyle = '#f4e68c'; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.moveTo(cx - headR * 0.15, headR * 0.28);
+        ctx.quadraticCurveTo(cx + headR * 0.35, -headR * 0.02, cx + headR * 0.95, headR * 0.5); ctx.stroke();
+
+        // bunched-up hood around the neck
+        ctx.fillStyle = '#1e1e1e';
+        ctx.beginPath();
+        ctx.ellipse(cx - w * 0.14, torsoY + h * 0.008, w * 0.11, w * 0.065, -0.25, 0, Math.PI * 2);
+        ctx.ellipse(cx + w * 0.14, torsoY + h * 0.008, w * 0.11, w * 0.065, 0.25, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillRect(cx - w * 0.14, torsoY - h * 0.012, w * 0.28, h * 0.035);
+        ctx.strokeStyle = '#0a0a0a'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(cx - w * 0.22, torsoY + h * 0.02); ctx.quadraticCurveTo(cx, torsoY + h * 0.045, cx + w * 0.22, torsoY + h * 0.02); ctx.stroke();
+        // drawstrings with aglets
+        ctx.strokeStyle = '#e8e8e8'; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.moveTo(cx - w * 0.05, torsoY + h * 0.03); ctx.quadraticCurveTo(cx - w * 0.07, torsoY + h * 0.1, cx - w * 0.05, torsoY + h * 0.14); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(cx + w * 0.05, torsoY + h * 0.03); ctx.quadraticCurveTo(cx + w * 0.08, torsoY + h * 0.09, cx + w * 0.06, torsoY + h * 0.12); ctx.stroke();
+        ctx.fillStyle = '#c0c0c0';
+        ctx.fillRect(cx - w * 0.06, torsoY + h * 0.14, 2.5, 4);
+        ctx.fillRect(cx + w * 0.05, torsoY + h * 0.12, 2.5, 4);
+        // kangaroo pocket
+        ctx.strokeStyle = '#2e2e2e'; ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(cx - w * 0.17, torsoY + torsoH * 0.66);
+        ctx.lineTo(cx - w * 0.12, torsoY + torsoH * 0.98);
+        ctx.lineTo(cx + w * 0.12, torsoY + torsoH * 0.98);
+        ctx.lineTo(cx + w * 0.17, torsoY + torsoH * 0.66);
+        ctx.stroke();
+        // crossbones under the skull print
+        ctx.strokeStyle = '#ddd'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+        var cbY = torsoY + torsoH * 0.35 + headR * 0.75;
+        ctx.beginPath();
+        ctx.moveTo(cx - headR * 0.5, cbY - headR * 0.18); ctx.lineTo(cx + headR * 0.46, cbY + headR * 0.18);
+        ctx.moveTo(cx + headR * 0.46, cbY - headR * 0.18); ctx.lineTo(cx - headR * 0.5, cbY + headR * 0.18);
+        ctx.stroke();
+        // question-mark button pin ("der Denker")
+        ctx.fillStyle = '#f0f0f0';
+        ctx.beginPath(); ctx.arc(cx - w * 0.155, torsoY + torsoH * 0.18, 4, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#111';
+        ctx.font = 'bold 6px monospace'; ctx.textAlign = 'center';
+        ctx.fillText('?', cx - w * 0.155, torsoY + torsoH * 0.18 + 2);
+        ctx.textAlign = 'left';
       });
     },
   },
@@ -522,10 +763,10 @@ const CHARACTERS = [
     palette: { skin: '#d9b08c', hair: '#5c3a1e', primary: '#1a1a24', secondary: '#3b5998', accent: '#e8c547', outline: '#0a0a12' },
     stats: { speed: 2.2, jumpVel: -10.8, health: 95 },
     moves: {
-      punch: { name: 'Doppel-Pinsel', anim: 'jab', dmg: 4, hits: 2, hitGap: 6, range: 120, total: 20, active: [4, 12], cooldown: 16, knockback: 3, fx: '#ff2d95' },
-      kick: { name: 'Axt-Tritt', anim: 'axekick', dmg: 12, range: 150, total: 36, active: [14, 22], cooldown: 34, knockback: 5, groundBounce: true, fx: '#00e6c3' },
-      fwd_punch: { name: 'Farbklecks-Würfel', anim: 'uppercut', dmg: 9, range: 122, total: 26, active: [6, 14], cooldown: 28, knockback: 5, chaosRoll: true, fx: '#ff2d95' },
-      fwd_kick: { name: 'Chaos-Hopser', anim: 'spinkick', dmg: 11, range: 152, total: 34, active: [12, 24], cooldown: 30, knockback: 8, hopper: true, hopVel: -6, fx: '#9b59b6' },
+      punch: { name: 'Kleks-Kanonade', anim: 'paintjab', dmg: 3, hits: 3, hitGap: 6, range: 120, total: 26, active: [4, 20], cooldown: 18, knockback: 2, dmgRand: [1, 5], fx: '#ff2d95' },
+      kick: { name: 'Farbexplosion', anim: 'brushkick', dmg: 10, range: 148, total: 36, active: [14, 22], cooldown: 34, knockback: 5, chaosRoll: true, fx: '#00e6c3' },
+      fwd_punch: { name: 'Doppelklecks', anim: 'chaosupper', dmg: 7, hits: 2, hitGap: 7, range: 122, total: 28, active: [6, 18], cooldown: 30, knockback: 5, chaosRoll: true, fx: '#ff2d95' },
+      fwd_kick: { name: 'Glücks-Hopser', anim: 'wobblekick', dmg: 11, range: 152, total: 34, active: [12, 24], cooldown: 30, knockback: 8, hopper: true, hopRand: true, fx: '#9b59b6' },
       special: { name: 'Zeit-Rückspul', dmg: 0, range: 0, total: 56, active: [22, 24], type: 'rewind' },
     },
     draw(ctx, fighter, w, h) {
@@ -608,6 +849,40 @@ const CHARACTERS = [
         ctx.beginPath(); ctx.arc(cx, headR * 2.1, headR * 0.5, 0.2 * Math.PI, 0.8 * Math.PI); ctx.stroke();
         ctx.fillStyle = '#c9a84c';
         ctx.beginPath(); ctx.arc(cx, headR * 2.55, 2.5, 0, Math.PI * 2); ctx.fill();
+
+        // shine strands in the long hair fall
+        ctx.strokeStyle = '#7a5230'; ctx.lineWidth = 1.3; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(cx - headR * 0.95, headR * 1.0);
+        ctx.quadraticCurveTo(cx - headR * 1.12, headR * 2.0, cx - headR * 0.85, torsoY + torsoH * 0.12); ctx.stroke();
+
+        // glasses temple arm back toward the ear
+        ctx.strokeStyle = '#2a1a10'; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.moveTo(cx + headR * 0.09, headR * 0.98); ctx.lineTo(cx - headR * 0.28, headR * 0.88); ctx.stroke();
+
+        // paintbrush tucked behind the ear
+        ctx.save();
+        ctx.translate(cx - headR * 0.35, headR * 0.72); ctx.rotate(-0.5);
+        ctx.strokeStyle = '#8a5a30'; ctx.lineWidth = 2.5; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(headR * 0.85, 0); ctx.stroke();
+        ctx.fillStyle = '#c0c0c0'; ctx.fillRect(headR * 0.85, -2, 3.5, 4);
+        ctx.fillStyle = '#ff2d95';
+        ctx.beginPath(); ctx.moveTo(headR * 0.85 + 3.5, -2); ctx.lineTo(headR * 1.25, 0); ctx.lineTo(headR * 0.85 + 3.5, 2); ctx.closePath(); ctx.fill();
+        ctx.restore();
+
+        // paint splatters on jacket and jeans
+        var splats = [
+          [w * 0.30, torsoY + torsoH * 0.5, '#ff2d95', 2.2], [w * 0.68, torsoY + torsoH * 0.32, '#00e6c3', 1.8],
+          [w * 0.52, torsoY + torsoH * 0.72, '#9b59b6', 2.5], [w * 0.38, h * 0.80, '#e8c547', 2.0],
+          [w * 0.60, h * 0.86, '#ff2d95', 1.6], [w * 0.26, torsoY + torsoH * 0.85, '#00e6c3', 1.4],
+        ];
+        for (var si2 = 0; si2 < splats.length; si2++) {
+          ctx.fillStyle = splats[si2][2];
+          ctx.beginPath(); ctx.arc(splats[si2][0], splats[si2][1], splats[si2][3], 0, Math.PI * 2); ctx.fill();
+        }
+        // one little drip
+        ctx.strokeStyle = '#9b59b6'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(w * 0.52, torsoY + torsoH * 0.72); ctx.lineTo(w * 0.52, torsoY + torsoH * 0.82); ctx.stroke();
+
         if (fighter.state === 'special') {
           const orbX = cx + w * 0.1, orbY = torsoY + h * 0.05 + h * 0.08;
           const colors = ['#00e6c3', '#7d5fff', '#ffffff', '#3b5998'];
@@ -633,10 +908,10 @@ const CHARACTERS = [
     palette: { skin: '#e3b98f', hair: '#d4a843', primary: '#2c3e8c', secondary: '#1c2a5e', accent: '#f4d03f', outline: '#141d3d', noEyes: true },
     stats: { speed: 1.6, jumpVel: -9.2, health: 110 },
     moves: {
-      punch: { name: 'Toast-Schlag', anim: 'straight', dmg: 7, range: 125, total: 20, active: [6, 11], cooldown: 18, knockback: 4, fx: '#e6b35c' },
-      kick: { name: 'Schlummer-Stampf', anim: 'axekick', dmg: 14, range: 105, total: 40, active: [16, 24], cooldown: 38, knockback: 6, groundBounce: true, armor: true, armorBreak: 9, fx: '#e6b35c' },
-      fwd_punch: { name: 'Toast-Hammer', anim: 'overhead', dmg: 14, range: 142, total: 34, active: [14, 22], cooldown: 34, knockback: 8, knockdown: true, stun: 24, lifesteal: 0.25, fx: '#ffffff' },
-      fwd_kick: { name: 'Schlaf-Feger', anim: 'sweep', dmg: 12, range: 155, total: 36, active: [13, 22], cooldown: 32, knockback: 5, knockdown: true, stun: 22, meterDrain: 18, fx: '#e6b35c' },
+      punch: { name: 'Gähn-Schwinger', anim: 'lazyswing', dmg: 7, range: 125, total: 20, active: [6, 11], cooldown: 18, knockback: 4, stun: 18, slowOnHit: true, fx: '#e6b35c' },
+      kick: { name: 'Matratzen-Stampf', anim: 'stomp', dmg: 14, range: 105, total: 40, active: [16, 24], cooldown: 38, knockback: 6, groundBounce: true, armor: true, armorBreak: 9, stompWave: true, fx: '#e6b35c' },
+      fwd_punch: { name: 'Butterseite', anim: 'overhead', dmg: 14, range: 142, total: 34, active: [14, 22], cooldown: 34, knockback: 6, groundBounce: true, stun: 22, lifesteal: 0.25, fx: '#ffffff' },
+      fwd_kick: { name: 'Decken-Zug', anim: 'bigsweep', dmg: 11, range: 155, total: 36, active: [13, 22], cooldown: 32, knockback: 5, pullIn: true, stun: 22, meterDrain: 18, fx: '#e6b35c' },
       special: { name: 'Wachgerüttelt!', dmg: 0, range: 0, total: 24, active: [6, 8], type: 'hyper', duration: 600, speedMult: 3.0, dmgMult: 0.35, atkSpeedMult: 2.3 },
     },
     draw(ctx, fighter, w, h) {
@@ -679,10 +954,10 @@ const CHARACTERS = [
     palette: { skin: '#deb08a', hair: '#e8d5a3', primary: '#8c2340', secondary: '#3a3545', accent: '#1a1a1a', outline: '#1a1018' },
     stats: { speed: 2.1, jumpVel: -10.24, health: 95 },
     moves: {
-      punch: { name: 'Schnalle', anim: 'jab', dmg: 5, range: 118, total: 15, active: [4, 8], cooldown: 13, knockback: 3, fx: '#8c2340' },
-      kick: { name: 'Klingen-Wirbel', anim: 'swordspin', dmg: 12, range: 110, total: 34, active: [12, 22], cooldown: 32, knockback: 9, fx: '#d0d0d8' },
-      fwd_punch: { name: 'Klingen-Stoß', anim: 'jab', dmg: 11, range: 150, total: 20, active: [5, 10], cooldown: 24, knockback: 5, fx: '#d0d0d8' },
-      fwd_kick: { name: 'Ketten-Haken', anim: 'grabreach', type: 'grab', dmg: 14, range: 260, total: 30, active: [8, 16], cooldown: 34, throwTotal: 24, throwDist: 0.5, fx: '#3a3545' },
+      punch: { name: 'Gürtel-Peitsche', anim: 'buckleswing', dmg: 5, range: 138, total: 16, active: [4, 9], cooldown: 14, knockback: 3, tipBonus: 1.4, tipThreshold: 0.7, fx: '#8c2340' },
+      kick: { name: 'Klingen-Wirbel', anim: 'swordspin', dmg: 7, hits: 2, hitGap: 8, range: 110, total: 34, active: [10, 24], cooldown: 32, knockback: 9, deflect: true, fx: '#d0d0d8' },
+      fwd_punch: { name: 'Klingentanz', anim: 'bladethrust', dmg: 5, hits: 3, hitGap: 5, range: 150, total: 26, active: [5, 20], cooldown: 28, knockback: 3, fx: '#d0d0d8' },
+      fwd_kick: { name: 'Ketten-Haken', anim: 'chainthrow', type: 'grab', dmg: 14, range: 260, total: 30, active: [8, 16], cooldown: 34, throwTotal: 24, throwDist: 0.5, meterBonus: 10, fx: '#3a3545' },
       special: { name: 'Schwert-Hieb', dmg: 20, range: 190, total: 36, active: [10, 20], knockback: 16, stun: 24, type: 'melee' },
     },
     draw(ctx, fighter, w, h) {
@@ -820,10 +1095,10 @@ const CHARACTERS = [
     palette: { skin: '#e7c19a', hair: '#d9c069', primary: '#18181f', secondary: '#2c2c3a', accent: '#e8c34a', outline: '#101015' },
     stats: { speed: 2.2, jumpVel: -10.6, health: 95 },
     moves: {
-      punch: { name: 'Schnapp-Jab', anim: 'jab', dmg: 5, range: 118, total: 15, active: [4, 8], cooldown: 13, knockback: 3, fx: '#f5d76e' },
-      kick: { name: 'Pirouetten-Tritt', anim: 'spinkick', dmg: 12, range: 150, total: 34, active: [12, 22], cooldown: 32, knockback: 9, fx: '#e8c34a' },
-      fwd_punch: { name: 'Pose-Upper', anim: 'uppercut', dmg: 9, range: 122, total: 26, active: [6, 14], cooldown: 28, knockback: 6, launcher: true, fx: '#f5d76e' },
-      fwd_kick: { name: 'Catwalk-Stoß', anim: 'dashkick', dmg: 11, range: 165, total: 32, active: [11, 20], cooldown: 30, knockback: 9, adv: 10, lunge: 24, fx: '#e8c34a' },
+      punch: { name: 'Stich-Jab', anim: 'flashjab', dmg: 4, range: 118, total: 15, active: [4, 8], cooldown: 13, knockback: 2, applyMark: true, fx: '#f5d76e' },
+      kick: { name: 'Nadel-Absatz', anim: 'photospin', dmg: 11, range: 145, total: 32, active: [12, 20], cooldown: 30, knockback: 7, retreat: true, fx: '#e8c34a' },
+      fwd_punch: { name: 'Pose-Upper', anim: 'risingflash', dmg: 9, range: 122, total: 26, active: [6, 14], cooldown: 28, knockback: 6, launcher: true, consumeMark: true, fx: '#f5d76e' },
+      fwd_kick: { name: 'Blitzlicht-Ansturm', anim: 'runwaykick', dmg: 11, range: 165, total: 32, active: [11, 20], cooldown: 30, knockback: 9, adv: 10, lunge: 24, consumeMark: true, flashOnConsume: true, fx: '#e8c34a' },
       special: { name: 'Express-Piercing', dmg: 24, range: 120, total: 40, active: [8, 18], knockback: 18, stun: 30, type: 'grab' },
     },
     draw(ctx, fighter, w, h) {
@@ -905,15 +1180,33 @@ const CHARACTERS = [
     palette: { skin: '#dba978', hair: '#5c3a20', primary: '#1c1824', secondary: '#241f2e', accent: '#d4af6a', outline: '#14101c' },
     stats: { speed: 2.0, jumpVel: -10.5, health: 100 },
     moves: {
-      punch: { name: 'Eleganter Jab', anim: 'jab', dmg: 5, range: 118, total: 15, active: [4, 8], cooldown: 13, knockback: 3, fx: '#d4af6a' },
-      kick: { name: 'Distinguierter Tritt', dmg: 11, range: 140, total: 30, active: [11, 18], cooldown: 28, knockback: 6, fx: '#d4af6a' },
-      fwd_punch: { name: 'Gehstock-Ausfall', anim: 'jab', dmg: 13, range: 215, total: 30, active: [9, 16], cooldown: 30, knockback: 8, adv: 15, lunge: 30, whiffPunish: true, whiffStun: 34, fx: '#d4af6a' },
-      fwd_kick: { name: 'Gehstock-Fegen', anim: 'sweep', dmg: 12, range: 155, total: 34, active: [13, 22], cooldown: 32, knockback: 5, knockdown: true, stun: 22, fx: '#d4af6a' },
-      special: { name: 'Pointe d\'Élégance', dmg: 16, range: 180, total: 34, active: [10, 18], knockback: 14, stun: 26, tipBonus: 1.85, tipThreshold: 0.68, fx: '#d4af6a' },
+      punch: { name: 'Doppel-Ohrfeige', anim: 'slap', dmg: 3, hits: 2, hitGap: 6, range: 98, total: 20, active: [5, 14], cooldown: 12, knockback: 2, meterDrain: 3, fx: '#fdf6e8' },
+      kick: { name: 'Steppschritt', anim: 'charleston', dmg: 6, hits: 2, hitGap: 8, range: 120, total: 34, active: [8, 24], cooldown: 30, knockback: 8, adv: 4, fx: '#d4af6a' },
+      fwd_punch: { name: 'Degen-Finte', anim: 'lungethrust', dmg: 6, range: 180, total: 20, active: [5, 10], cooldown: 22, knockback: 4, counterMult: 2.8, counterLabel: 'RIPOSTE!', whiffPunish: true, whiffStun: 30, fx: '#d4af6a' },
+      fwd_kick: { name: 'Manieren-Lektion', anim: 'canehook', dmg: 10, range: 148, total: 32, active: [12, 20], cooldown: 30, knockback: 0, pullIn: true, stun: 30, fx: '#d4af6a' },
+      special: { name: 'Coup de Grâce', anim: 'lungethrust', dmg: 40, range: 175, total: 32, active: [8, 16], knockback: 18, stun: 30, type: 'riposte', fx: '#ffd700' },
     },
     draw(ctx, fighter, w, h) {
-      drawHumanoid(ctx, w, h, fighter, this.palette, ({ w, h, cx, headR, torsoY, torsoH, frontFist }) => {
+      drawHumanoid(ctx, w, h, fighter, this.palette, ({ w, h, cx, headR, torsoY, torsoH, frontFist, backFist }) => {
         const t = fighter.animTime || 0;
+        // White dress glove on the back hand (front hand gets one after the sleeve draw below)
+        const glove = function (p, r) {
+          ctx.fillStyle = '#fdf6e8';
+          ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fill();
+          ctx.strokeStyle = '#c9bfa8'; ctx.lineWidth = 1; ctx.stroke();
+        };
+        glove(backFist, w * 0.075);
+        glove(frontFist, w * 0.085);
+        // slap swoosh trailing the open glove during the backhand
+        if (fighter.state === 'punch' && fighter.stateTimer >= 4 && fighter.stateTimer <= 12) {
+          ctx.save();
+          ctx.globalAlpha = 0.55;
+          ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+          ctx.beginPath();
+          ctx.arc(cx + w * 0.06, frontFist.y, w * 0.44, -1.0, 0.4);
+          ctx.stroke();
+          ctx.restore();
+        }
         // Double-breasted jacket overlap
         ctx.fillStyle = this.palette.secondary;
         ctx.beginPath();
@@ -998,12 +1291,28 @@ const CHARACTERS = [
         ctx.beginPath(); ctx.moveTo(cx + headR * 0.82, headR * 0.95); ctx.lineTo(cx + headR * 0.86, headR * 1.5); ctx.stroke();
 
         // Cane — swung during heavy attacks/special, otherwise resting at his hip
-        const isHeavy = fighter.state === 'fwd_punch' || fighter.state === 'fwd_kick' || fighter.state === 'special';
-        if (isHeavy && fighter.stateTimer >= 3) {
+        const isThrust = fighter.state === 'fwd_punch' || fighter.state === 'special';
+        const isHook = fighter.state === 'fwd_kick';
+        if (isHook && fighter.stateTimer >= 2) {
+          // Low hooking sweep: cane reaches down and forward, the crook yanks the leg in
+          const sw = Math.min(1, (fighter.stateTimer - 2) / 10);
+          const reach = w * 0.9 * sw;
+          const sx = frontFist.x, sy = frontFist.y;
+          ctx.save(); ctx.translate(sx, sy); ctx.rotate(0.85 - sw * 0.35);
+          ctx.strokeStyle = '#1a120a'; ctx.lineWidth = 4; ctx.lineCap = 'round';
+          ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(reach, 0); ctx.stroke();
+          // gold crook (J-hook) at the tip
+          ctx.strokeStyle = this.palette.accent; ctx.lineWidth = 4;
+          ctx.beginPath(); ctx.arc(reach, -6, 6, Math.PI * 0.5, Math.PI * 1.6); ctx.stroke();
+          ctx.restore();
+          // motion arc of the hooking sweep
+          ctx.strokeStyle = 'rgba(212,175,106,0.45)'; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.arc(sx, sy, reach * 0.9, 0.3, 1.1); ctx.stroke();
+        } else if (isThrust && fighter.stateTimer >= 3) {
           const ext = Math.min(1, (fighter.stateTimer - 3) / 7);
           const caneLen = w * (fighter.state === 'special' ? 1.3 : 1.0) * ext;
           const sx = frontFist.x, sy = frontFist.y;
-          ctx.save(); ctx.translate(sx, sy); ctx.rotate(fighter.state === 'fwd_kick' ? 0.5 : -0.1);
+          ctx.save(); ctx.translate(sx, sy); ctx.rotate(-0.1);
           ctx.strokeStyle = '#1a120a'; ctx.lineWidth = 4; ctx.lineCap = 'round';
           ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(caneLen, 0); ctx.stroke();
           ctx.fillStyle = this.palette.accent;
@@ -1048,6 +1357,22 @@ function drawProjectile(ctx, p) {
     ctx.fillStyle = '#cd853f'; ctx.beginPath(); ctx.arc(0, 0, 14, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#e6b35c'; ctx.beginPath(); ctx.arc(0, 0, 10, 0, Math.PI * 2); ctx.fill();
     ctx.fillStyle = '#cd853f'; ctx.beginPath(); ctx.arc(9, -8, 6, 0, Math.PI * 2); ctx.fill();
+  } else if (p.type === 'tremor') {
+    // low ground ripple: cracked earth ridges rolling forward
+    ctx.rotate(-(p.rotation || 0));
+    const dir = p.vx >= 0 ? 1 : -1;
+    ctx.strokeStyle = '#b0a48c';
+    ctx.lineWidth = 3;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 3; i++) {
+      ctx.beginPath();
+      ctx.arc(-i * 8 * dir, -2, 12 - i * 3, Math.PI, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.fillStyle = 'rgba(176,164,140,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(0, -4, 20, 9, 0, 0, Math.PI * 2);
+    ctx.fill();
   } else if (p.type === 'flash') {
     ctx.rotate(-(p.rotation || 0));
     ctx.fillStyle = 'rgba(255,247,200,0.35)';
