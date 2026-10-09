@@ -1512,7 +1512,7 @@ const CHARACTERS = [
   },
   {
     id: 'ben', name: 'Ben', title: 'Der Millionärssohn',
-    palette: { skin: '#f0c8a8', hair: '#7a4a2a', primary: '#f4f4f2', secondary: '#2a2a2e', accent: '#d4af37', outline: '#16161a' },
+    palette: { skin: '#f0c8a8', hair: '#d9b45a', primary: '#f4f4f2', secondary: '#2a2a2e', accent: '#d4af37', outline: '#16161a' },
     stats: { speed: 2.1, jumpVel: -10.6, health: 95 },
     moves: {
       punch: { name: 'Scheinklatsche', anim: 'slap', dmg: 4, hits: 2, hitGap: 6, range: 110, total: 20, active: [5, 14], cooldown: 14, knockback: 2, fx: '#3fae5a' },
@@ -1533,12 +1533,12 @@ const CHARACTERS = [
         ctx.fillStyle = '#7a4a22'; ctx.fillRect(w * 0.18, hipY - 6, w * 0.64, 6);
         ctx.fillStyle = '#d4af37'; ctx.fillRect(cx - 4, hipY - 7, 8, 8);
         ctx.fillStyle = '#3fae5a'; ctx.fillRect(cx + w * 0.16, hipY + 2, 8, 10);
-        // styled-up brown quiff
-        ctx.fillStyle = '#7a4a2a';
+        // styled-up blonde quiff
+        ctx.fillStyle = '#d9b45a';
         for (let i = -2; i <= 2; i++) {
           ctx.beginPath(); ctx.arc(cx + i * headR * 0.38, headR * (0.2 + Math.abs(i) * 0.12), headR * 0.36, 0, Math.PI * 2); ctx.fill();
         }
-        ctx.fillStyle = '#9a6238';
+        ctx.fillStyle = '#ecd08a';
         ctx.beginPath(); ctx.arc(cx + headR * 0.2, headR * 0.05, headR * 0.22, 0, Math.PI * 2); ctx.fill();
         // gold watch
         ctx.fillStyle = '#d4af37'; ctx.fillRect(backFist.x - 5, backFist.y - 7, 10, 4);
@@ -1578,14 +1578,39 @@ const CHARACTERS = [
           ctx.fillStyle = '#c0c0c8'; ctx.fillRect(cx - 9, torsoY + torsoH * 0.38, 18, 3);
           ctx.fillStyle = '#555'; ctx.beginPath(); ctx.arc(cx + 2, torsoY + torsoH * 0.38 + 7, 3.5, 0, Math.PI * 2); ctx.fill();
         }
-        // wavy dark curls, a bit longer at the back and sides
+        // wolf cut: voluminous shaggy crown, choppy layered sides, longer mullet-ish back
         ctx.fillStyle = '#3b2418';
-        for (let i = 0; i < 7; i++) {
-          const a = Math.PI * (1.0 + i * 0.16);
-          ctx.beginPath(); ctx.arc(cx + Math.cos(a) * headR * 0.95, headR + 2 + Math.sin(a) * headR * 0.95, headR * 0.34, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(cx - headR * 0.05, headR * 0.75, headR * 1.18, Math.PI * 0.95, Math.PI * 2.05); ctx.fill();
+        // jagged layers down the back to the neck
+        ctx.beginPath();
+        ctx.moveTo(cx - headR * 0.2, headR * 0.3);
+        ctx.lineTo(cx - headR * 1.25, headR * 0.9);
+        ctx.lineTo(cx - headR * 1.05, headR * 1.35); ctx.lineTo(cx - headR * 1.3, headR * 1.7);
+        ctx.lineTo(cx - headR * 1.0, headR * 2.0); ctx.lineTo(cx - headR * 1.2, headR * 2.45);
+        ctx.lineTo(cx - headR * 0.75, headR * 2.35); ctx.lineTo(cx - headR * 0.55, headR * 1.3);
+        ctx.closePath(); ctx.fill();
+        // choppy side layer in front of the ear
+        ctx.beginPath();
+        ctx.moveTo(cx + headR * 0.55, headR * 0.6); ctx.lineTo(cx + headR * 1.05, headR * 1.0);
+        ctx.lineTo(cx + headR * 0.85, headR * 1.25); ctx.lineTo(cx + headR * 1.0, headR * 1.6);
+        ctx.lineTo(cx + headR * 0.72, headR * 1.45); ctx.lineTo(cx + headR * 0.7, headR * 0.9);
+        ctx.closePath(); ctx.fill();
+        // curtain-bang spikes over the forehead
+        for (let i = -1; i <= 2; i++) {
+          const bx = cx + i * headR * 0.36;
+          ctx.beginPath(); ctx.moveTo(bx - headR * 0.24, headR * 0.55);
+          ctx.lineTo(bx + headR * 0.02, headR * (0.98 + (i & 1) * 0.14));
+          ctx.lineTo(bx + headR * 0.22, headR * 0.55); ctx.closePath(); ctx.fill();
         }
-        ctx.beginPath(); ctx.arc(cx - headR * 0.85, headR * 1.65, headR * 0.34, 0, Math.PI * 2); ctx.fill();
-        ctx.beginPath(); ctx.arc(cx - headR * 0.7, headR * 2.05, headR * 0.3, 0, Math.PI * 2); ctx.fill();
+        // spiky top texture
+        for (let i = -3; i <= 3; i++) {
+          const tx = cx + i * headR * 0.3;
+          ctx.beginPath(); ctx.moveTo(tx - headR * 0.16, -headR * 0.15 + Math.abs(i) * headR * 0.08);
+          ctx.lineTo(tx + headR * 0.05, -headR * 0.42 + Math.abs(i) * headR * 0.12);
+          ctx.lineTo(tx + headR * 0.18, -headR * 0.1 + Math.abs(i) * headR * 0.08); ctx.closePath(); ctx.fill();
+        }
+        ctx.strokeStyle = '#5a3a26'; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.moveTo(cx - headR * 0.9, headR * 1.0); ctx.lineTo(cx - headR * 1.0, headR * 1.9); ctx.stroke();
         // thin moustache
         ctx.strokeStyle = '#3b2418'; ctx.lineWidth = 1.4;
         ctx.beginPath(); ctx.moveTo(cx + headR * 0.15, headR * 1.48); ctx.quadraticCurveTo(cx + headR * 0.38, headR * 1.4, cx + headR * 0.62, headR * 1.5); ctx.stroke();
@@ -1607,6 +1632,45 @@ const CHARACTERS = [
       });
     },
   },
+  {
+    id: 'bin', name: 'Bin', title: 'Die Wild Card',
+    palette: { skin: '#ecc9a6', hair: '#6b3a24', primary: '#151517', secondary: '#2b2b33', accent: '#e6e6e6', outline: '#0c0c0e' },
+    stats: { speed: 2.15, jumpVel: -10.6, health: 95 },
+    moves: {
+      punch: { name: 'Augenrollen', anim: 'slap', dmg: 5, dmgRand: [1, 10], range: 112, total: 18, active: [5, 10], cooldown: 14, knockback: 3, fx: '#e6e6e6' },
+      kick: { name: 'Irgendwas rollen', anim: 'snapjab', dmg: 0, range: 0, total: 22, active: [8, 10], cooldown: 70, knockback: 0, spawn: 'roller', fx: '#e6e6e6' },
+      fwd_punch: { name: 'Copy-Paste', anim: 'dashpunch', dmg: 7, range: 128, total: 24, active: [7, 13], cooldown: 30, knockback: 5, copy: true, fx: '#e6e6e6' },
+      fwd_kick: { name: 'Glitch', anim: 'snapjab', dmg: 0, range: 0, total: 16, active: [4, 6], cooldown: 60, knockback: 0, glitch: true, fx: '#ff00ff' },
+      special: { name: 'WILD CARD', dmg: 25, range: 220, total: 36, active: [8, 18], knockback: 16, stun: 30, type: 'grab' },
+    },
+    draw(ctx, fighter, w, h) {
+      drawHumanoid(ctx, w, h, fighter, this.palette, ({ w, h, cx, headR, torsoY, frontFist, backFist }) => {
+        // thin black straps
+        ctx.strokeStyle = '#000'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(cx - w * 0.12, torsoY); ctx.lineTo(cx - w * 0.1, torsoY - 4); ctx.moveTo(cx + w * 0.12, torsoY); ctx.lineTo(cx + w * 0.1, torsoY - 4); ctx.stroke();
+        drawLongHair(ctx, cx, headR, h * 0.25, '#6b3a24', '#8a4e30');
+        // blunt fringe
+        ctx.fillStyle = '#6b3a24';
+        ctx.beginPath(); ctx.moveTo(cx - headR * 0.85, headR * 0.5); ctx.lineTo(cx + headR * 0.9, headR * 0.5);
+        ctx.lineTo(cx + headR * 0.85, headR * 0.84); ctx.lineTo(cx - headR * 0.6, headR * 0.8); ctx.closePath(); ctx.fill();
+        // half-closed, deeply unimpressed eyelid
+        ctx.fillStyle = '#ecc9a6';
+        ctx.fillRect(cx + headR * 0.15, headR * 0.82, headR * 0.6, headR * 0.24);
+        ctx.strokeStyle = '#2a1a12'; ctx.lineWidth = 1.6;
+        ctx.beginPath(); ctx.moveTo(cx + headR * 0.18, headR * 1.06); ctx.lineTo(cx + headR * 0.74, headR * 1.06); ctx.stroke();
+        // flat mouth
+        ctx.strokeStyle = '#9a5a50'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(cx + headR * 0.2, headR * 1.62); ctx.lineTo(cx + headR * 0.5, headR * 1.62); ctx.stroke();
+        // joker card
+        const hand = fighter.state === 'special' || fighter.state === 'win' ? frontFist : backFist;
+        ctx.save(); ctx.translate(hand.x, hand.y - 6); ctx.rotate(-0.25);
+        ctx.fillStyle = '#fff'; ctx.fillRect(-6, -9, 12, 17);
+        ctx.strokeStyle = '#111'; ctx.lineWidth = 1; ctx.strokeRect(-6, -9, 12, 17);
+        ctx.fillStyle = '#d0021b'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center'; ctx.fillText('J', 0, 3);
+        ctx.restore();
+      });
+    },
+  },
 ];
 
 function drawProjectile(ctx, p) {
@@ -1617,6 +1681,26 @@ function drawProjectile(ctx, p) {
     ctx.fillStyle = '#7f8c8d'; ctx.fillRect(-14, -3, 28, 6);
     ctx.fillStyle = '#3498db'; ctx.fillRect(-12, -14, 24, 11);
     ctx.strokeStyle = '#bdc3c7'; ctx.strokeRect(-12, -14, 24, 11);
+  } else if (p.type === 'roller') {
+    const r = p.r;
+    if (p.kind === 'tonne') {
+      ctx.rotate(-(p.rotation || 0));
+      ctx.rotate(p.rotation * 0.5);
+      ctx.fillStyle = '#5f6b73'; ctx.fillRect(-r, -r * 0.8, r * 2, r * 1.6);
+      ctx.fillStyle = '#48535a'; for (let k = -1; k <= 1; k++) ctx.fillRect(-r, k * r * 0.45 - 2, r * 2, 4);
+      ctx.fillStyle = '#2f373c'; ctx.fillRect(-r - 3, -r * 0.85, r * 2 + 6, 5);
+    } else if (p.kind === 'kuehlschrank') {
+      ctx.rotate(-(p.rotation || 0) + Math.sin(p.rotation) * 0.15);
+      ctx.fillStyle = '#e9edf0'; ctx.fillRect(-r * 0.75, -r, r * 1.5, r * 2);
+      ctx.strokeStyle = '#9aa4ab'; ctx.lineWidth = 2; ctx.strokeRect(-r * 0.75, -r, r * 1.5, r * 2);
+      ctx.beginPath(); ctx.moveTo(-r * 0.75, -r * 0.25); ctx.lineTo(r * 0.75, -r * 0.25); ctx.stroke();
+      ctx.fillStyle = '#9aa4ab'; ctx.fillRect(r * 0.45, -r * 0.8, 3, 10); ctx.fillRect(r * 0.45, 0, 3, 14);
+    } else {
+      ctx.fillStyle = p.kind === 'bowling' ? '#1b2a6b' : '#2f8a3a';
+      ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.fill();
+      if (p.kind === 'bowling') { ctx.fillStyle = '#000'; [[-4, -5], [3, -6], [0, 1]].forEach(function (d) { ctx.beginPath(); ctx.arc(d[0], d[1], 2.2, 0, Math.PI * 2); ctx.fill(); }); }
+      else { ctx.strokeStyle = '#1d5e26'; ctx.lineWidth = 2; for (let k = -2; k <= 2; k++) { ctx.beginPath(); ctx.ellipse(k * r * 0.3, 0, r * 0.12, r * 0.95, 0, 0, Math.PI * 2); ctx.stroke(); } }
+    }
   } else if (p.type === 'polaroid') {
     ctx.rotate(-(p.rotation || 0) + Math.sin(p.rotation * 2) * 0.3);
     ctx.fillStyle = '#f7f7f2'; ctx.fillRect(-11, -12, 22, 25);
