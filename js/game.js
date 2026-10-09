@@ -328,6 +328,7 @@ function createFighter(charDef, x, facing, controls) {
     markTimer: 0,
     money: 500, bribedTimer: 0,
     steam: 0, steamBonus: 0, noJumpTimer: 0, rootTimer: 0, faults: 0,
+    film: 8, reloadTimer: 0, invertTimer: 0, cloneTimer: 0,
   };
 }
 
@@ -352,13 +353,23 @@ function spawnPopup(x, y, text, color) {
   popups.push({ x: x, y: y, text: text, color: color, life: 45 });
 }
 
+function mv0(f, type) { return f.charDef.moves[type]; }
 function startAttack(f, type) {
+  // Ben can only spend money he actually has
+  var costMv = f.charDef.moves[type];
+  if (costMv && costMv.cost && (f.money || 0) < costMv.cost) {
+    if (globalTime - (f.brokeMsgAt || -99) > 30) { spawnPopup(f.x + FIGHTER_WIDTH / 2, f.y - 10, 'PLEITE! (' + costMv.cost + '€)', '#ff5252'); f.brokeMsgAt = globalTime; }
+    return;
+  }
   f.state = type;
   f.stateTimer = 0;
   f.hasHit = false;
   f.hitCount = 0;
   f.lastHitFrame = -99;
   f.blocking = false;
+  // Felix: camera moves expose one frame of film
+  if (mv0(f, type) && mv0(f, type).film) f.film = Math.max(0, f.film - mv0(f, type).film);
+  f.cloneHitCount = 0; f.cloneLastHit = -99;
   // Niklas: built-up steam powers the next attack, then vents
   f.steamBonus = Math.floor((f.steam || 0) / 60);
   f.steam = 0;
@@ -385,7 +396,8 @@ function startAttack(f, type) {
 
 // --- Fighter Update ---
 function updateFighter(f) {
-  var c = f.controls;
+  // Felix' negative: left and right are swapped while inverted
+  var c = f.invertTimer > 0 ? Object.assign({}, f.controls, { left: f.controls.right, right: f.controls.left }) : f.controls;
   f.animTime++;
 
   if (f.state === 'thrown') {
@@ -436,6 +448,8 @@ function updateFighter(f) {
   if (f.noJumpTimer > 0) f.noJumpTimer--;
   if (f.rootTimer > 0) f.rootTimer--;
   if (f.bribedTimer > 0) f.bribedTimer--;
+  if (f.invertTimer > 0) f.invertTimer--;
+  if (f.cloneTimer > 0) f.cloneTimer--;
   if (f.markTimer > 0) {
     f.markTimer--;
     if (globalTime % 6 === 0) spawnParticles(f.x + FIGHTER_WIDTH / 2, f.y - 6, '#f5d76e', 1, 1);
@@ -459,6 +473,19 @@ function updateFighter(f) {
   }
 
   var canAct = inState(f, ['idle', 'walk', 'jump']);
+  // Felix: an empty roll has to be rewound before he can act again
+  if (f.charDef.id === 'felix') {
+    if (f.reloadTimer > 0) {
+      f.reloadTimer--;
+      canAct = false;
+      if (f.grounded) { f.vx *= 0.6; f.state = 'idle'; }
+      if (f.reloadTimer === 0) { f.film = 8; spawnPopup(f.x + FIGHTER_WIDTH / 2, f.y - 10, 'NEUER FILM!', '#f7f7f2'); }
+    } else if (canAct && f.film <= 0 && f.grounded) {
+      f.reloadTimer = 90; canAct = false;
+      spawnPopup(f.x + FIGHTER_WIDTH / 2, f.y - 10, 'FILM WECHSELN!', '#f7f7f2');
+      playSound('rewind');
+    }
+  }
 
   if (canAct) {
     // Dash / backdash via double-tap
@@ -734,6 +761,7 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
   }
   defender.steam = 0;
   if (moveFlags.noJump) { defender.noJumpTimer = moveFlags.noJump; spawnPopup(hx, hy - 58, 'ENTWERTET!', '#e2001a'); }
+  if (moveFlags.invert) { defender.invertTimer = moveFlags.invert; spawnPopup(hx, hy - 58, 'NEGATIV!', '#f7f7f2'); }
   if (moveFlags.root) { defender.rootTimer = moveFlags.root; spawnPopup(hx, hy - 58, 'HALT!', '#ff2a2a'); }
   // Lisa's fault points: three strikes fail the test, the next hit punishes double
   if (moveFlags.faultPoint) {
@@ -984,7 +1012,7 @@ function updateCinematic() {
 function checkMeleeHit(attacker, defender) {
   if (!isAttackState(attacker)) return;
   var move = attacker.charDef.moves[attacker.state];
-  if (move.type === 'projectile' || move.type === 'rewind' || move.type === 'hyper' || move.type === 'crossing' || move.type === 'moneyrain') return;
+  if (move.type === 'projectile' || move.type === 'rewind' || move.type === 'hyper' || move.type === 'crossing' || move.type === 'moneyrain' || move.type === 'clone') return;
   var maxHits = move.hits || 1;
   if ((attacker.hitCount || 0) >= maxHits) return;
 
@@ -1022,7 +1050,7 @@ function checkMeleeHit(attacker, defender) {
     tipBonus: move.tipBonus, counterMeter: move.counterMeter, slowOnHit: !!move.slowOnHit,
     applyMark: !!move.applyMark, consumeMark: !!move.consumeMark, flashOnConsume: !!move.flashOnConsume,
     retreat: !!move.retreat, cdRefund: move.cdRefund, faultPoint: !!move.faultPoint, drainLabel: move.drainLabel,
-    noJump: move.noJump, root: move.root,
+    noJump: move.noJump, root: move.root, invert: move.invert,
   };
 
   // Everything is parriable in this game, including grabs/throws and cinematic supers
@@ -1189,6 +1217,11 @@ function checkProjectileSpawn(attacker) {
       meterSteal: move.meterSteal || 0,
     });
     attacker.hasHit = true;
+  } else if (move.type === 'clone') {
+    attacker.cloneTimer = move.duration;
+    spawnPopup(attacker.x + FIGHTER_WIDTH / 2, attacker.y - 10, 'DOPPELBELICHTUNG!', '#9fd3ff');
+    flashBurst = Math.max(flashBurst, 0.5);
+    attacker.hasHit = true;
   } else if (move.type === 'moneyrain') {
     // the richer Ben is, the more gold rains down; it empties the account
     var drops = Math.min(14, 4 + Math.floor((attacker.money || 0) / 100));
@@ -1344,6 +1377,17 @@ function updateStageObjects() {
         o.x -= o.facing * 6;
         if (o.t > 30) { stageObjects.splice(i, 1); continue; }
       }
+    } else if (o.type === 'selftimer') {
+      if (o.age === 30 || o.age === 60) playSound('select');
+      if (o.age === 90) {
+        playSound('boom'); flashBurst = Math.max(flashBurst, 0.45);
+        var inFront = o.facing > 0 ? ocx > o.x - 10 && ocx < o.x + 280 : ocx < o.x + 10 && ocx > o.x - 280;
+        if (inFront && opp.state !== 'ko') {
+          applyDamage(opp, 12, o.owner, 6, false, 40, false, true);
+          spawnPopup(ocx, opp.y - 20, 'ÜBERBELICHTET!', '#fff7cc');
+        }
+      }
+      if (o.age > 104) stageObjects.splice(i, 1);
     } else if (o.type === 'heli') {
       o.x = o.dir > 0 ? -160 + o.age * 7.5 : CANVAS_W + 160 - o.age * 7.5;
       if (o.age % 24 === 1) playSound('whoosh');
@@ -1385,6 +1429,16 @@ function updateStageObjects() {
   }
 }
 
+// Felix' double exposure: a ghost on the far side of the opponent mirrors his melee attacks
+function checkCloneHit(f, opp) {
+  if (!(f.cloneTimer > 0)) { f.cloneX = null; return; }
+  f.cloneX = Math.max(0, Math.min(CANVAS_W - FIGHTER_WIDTH, opp.x * 2 - f.x));
+  if (!isAttackState(f)) return;
+  var ghost = Object.assign({}, f, { x: f.cloneX, facing: -f.facing, hitCount: f.cloneHitCount || 0, lastHitFrame: f.cloneLastHit || -99, hasHit: false, cloneTimer: 0 });
+  checkMeleeHit(ghost, opp);
+  f.cloneHitCount = ghost.hitCount; f.cloneLastHit = ghost.lastHitFrame;
+}
+
 function spawnBenObject(f, move) {
   var paid = true;
   if (move.cost) {
@@ -1398,6 +1452,17 @@ function spawnBenObject(f, move) {
     stageObjects.push({ type: 'bodyguard', x: fx + f.facing * 30, owner: f, facing: f.facing, age: 0, phase: 'walk', t: 0, dmg: paid ? 12 : 6 });
   } else if (move.spawn === 'bribe') {
     projectiles.push({ x: fx + f.facing * 30, y: fy, vx: 9 * f.facing, dmg: 2, type: 'bribe', owner: f, rotation: 0, bribe: paid ? 120 : 60 });
+  } else if (move.spawn === 'selftimer') {
+    stageObjects = stageObjects.filter(function (o) { return !(o.type === 'selftimer' && o.owner === f); });
+    stageObjects.push({ type: 'selftimer', x: Math.max(30, Math.min(CANVAS_W - 30, fx + f.facing * 50)), facing: f.facing, owner: f, age: 0 });
+  } else if (move.spawn === 'polaroids') {
+    var throwers = [{ x: fx, dir: f.facing }];
+    if (f.cloneTimer > 0 && f.cloneX != null) throwers.push({ x: f.cloneX + FIGHTER_WIDTH / 2, dir: -f.facing });
+    throwers.forEach(function (t) {
+      [0.12, 0.45, 0.8].forEach(function (hy) {
+        projectiles.push({ x: t.x + t.dir * 30, y: f.y + FIGHTER_HEIGHT * hy, vx: 10 * t.dir, dmg: 4, type: 'polaroid', owner: f, rotation: 0 });
+      });
+    });
   } else if (move.spawn === 'card') {
     projectiles.push({ x: fx + f.facing * 30, y: fy, startX: fx, vx: 12 * f.facing, dmg: 6, type: 'card', owner: f, rotation: 0 });
   }
@@ -1412,6 +1477,30 @@ function drawStageObjects(front) {
       drawActor(BODYGUARD, o.x, FLOOR_Y, o.phase === 'leave' ? -o.facing : o.facing, 1,
         mkActor(BODYGUARD, o.phase === 'punch' ? 'punch' : 'walk', o.phase === 'punch' ? o.t : 0));
       ctx.restore();
+      return;
+    }
+    if (o.type === 'selftimer' && !front) {
+      ctx.save(); ctx.translate(o.x, FLOOR_Y);
+      ctx.strokeStyle = '#2b2b2b'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(0, -70); ctx.lineTo(-18, 0); ctx.moveTo(0, -70); ctx.lineTo(18, 0); ctx.moveTo(0, -70); ctx.lineTo(0, 0); ctx.stroke();
+      ctx.scale(o.facing, 1);
+      ctx.fillStyle = '#1a1a1a'; ctx.fillRect(-14, -88, 28, 18);
+      ctx.fillStyle = '#c0c0c8'; ctx.fillRect(-14, -88, 28, 4);
+      ctx.fillStyle = '#555'; ctx.beginPath(); ctx.arc(14, -79, 6, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = (o.age < 90 && o.age % 30 < 8) ? '#ff2a2a' : '#5a1010'; ctx.beginPath(); ctx.arc(-8, -92, 3, 0, Math.PI * 2); ctx.fill();
+      if (o.age >= 90 && o.age < 100) {
+        var fl = 1 - (o.age - 90) / 10;
+        ctx.fillStyle = 'rgba(255,250,220,' + (0.7 * fl) + ')';
+        ctx.beginPath(); ctx.moveTo(18, -79); ctx.lineTo(290, -190); ctx.lineTo(290, 10); ctx.closePath(); ctx.fill();
+      }
+      ctx.restore();
+      if (o.age < 90) {
+        ctx.save(); ctx.textAlign = 'center'; ctx.font = 'bold 22px monospace';
+        ctx.fillStyle = '#fff'; ctx.strokeStyle = '#000'; ctx.lineWidth = 4;
+        var cd = String(3 - Math.floor(o.age / 30));
+        ctx.strokeText(cd, o.x, FLOOR_Y - 104); ctx.fillText(cd, o.x, FLOOR_Y - 104);
+        ctx.restore();
+      }
       return;
     }
     if (o.type === 'heli' && front) {
@@ -1642,6 +1731,7 @@ function resetFightersForRound() {
     f.slowTimer = 0; f.markTimer = 0; f.faults = 0;
     f.steam = 0; f.steamBonus = 0; f.noJumpTimer = 0; f.rootTimer = 0;
     f.money = 500; f.bribedTimer = 0;
+    f.film = 8; f.reloadTimer = 0; f.invertTimer = 0; f.cloneTimer = 0;
   });
   projectiles = []; particles = []; popups = []; stageObjects = [];
   roundTimer = 99; history = []; rewindEffect = 0; rewindGhosts = []; slowmo = 0;
@@ -1707,6 +1797,8 @@ function updateFight() {
   if (gameState !== 'FIGHT') return;
   checkMeleeHit(fighter2, fighter1);
   if (gameState !== 'FIGHT') return;
+  checkCloneHit(fighter1, fighter2);
+  checkCloneHit(fighter2, fighter1);
   checkProjectileSpawn(fighter1);
   checkProjectileSpawn(fighter2);
   checkRewindTrigger(fighter1);
@@ -1866,8 +1958,28 @@ function drawFighter(f) {
   ctx.translate(f.x + FIGHTER_WIDTH / 2, f.y);
   ctx.scale(f.facing, 1);
   ctx.translate(-FIGHTER_WIDTH / 2, 0);
+  if (f.invertTimer > 0) ctx.filter = 'invert(1)';
   f.charDef.draw(ctx, f, FIGHTER_WIDTH, FIGHTER_HEIGHT);
+  ctx.filter = 'none';
   ctx.restore();
+
+  // Felix' double-exposure ghost
+  if (f.cloneTimer > 0 && f.cloneX != null) {
+    ctx.save();
+    ctx.globalAlpha = 0.45 * Math.min(1, f.cloneTimer / 30);
+    ctx.translate(f.cloneX + FIGHTER_WIDTH / 2, f.y);
+    ctx.scale(-f.facing, 1);
+    ctx.translate(-FIGHTER_WIDTH / 2, 0);
+    f.charDef.draw(ctx, f, FIGHTER_WIDTH, FIGHTER_HEIGHT);
+    ctx.restore();
+  }
+  if (f.reloadTimer > 0) {
+    ctx.save(); ctx.textAlign = 'center'; ctx.font = 'bold 12px monospace';
+    ctx.fillStyle = '#f7f7f2'; ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
+    var rtxt = 'FILM WECHSELN ' + '|/-\\'[Math.floor(globalTime / 5) % 4];
+    ctx.strokeText(rtxt, f.x + FIGHTER_WIDTH / 2, f.y - 14); ctx.fillText(rtxt, f.x + FIGHTER_WIDTH / 2, f.y - 14);
+    ctx.restore();
+  }
 
   if (f.hyperTimer > 0) {
     ctx.save();
@@ -2014,6 +2126,10 @@ function drawHealthBar(x, f, flip) {
   if (f.charDef.id === 'ben') {
     ctx.fillStyle = '#d4af37'; ctx.font = 'bold 13px monospace';
     ctx.fillText('Kontostand: ' + f.money + ' €', flip ? x + w : x, barY + 36);
+  }
+  if (f.charDef.id === 'felix') {
+    ctx.fillStyle = '#f7f7f2'; ctx.font = 'bold 13px monospace';
+    ctx.fillText('Film: ' + '▮'.repeat(f.film) + '▯'.repeat(8 - f.film) + ' ' + f.film + '/8', flip ? x + w : x, barY + 36);
   }
 }
 
@@ -2864,7 +2980,7 @@ window.__sfDebug = {
     }
     return out;
   },
-  state: function () { return { money: fighter1.money, f1: { x: fighter1.x, state: fighter1.state, hp: fighter1.hp }, f2: { x: fighter2.x, state: fighter2.state, hp: fighter2.hp } }; },
+  state: function () { return { money: fighter1.money, film: fighter1.film, reload: fighter1.reloadTimer, f2inv: fighter2.invertTimer, f1: { x: fighter1.x, state: fighter1.state, hp: fighter1.hp }, f2: { x: fighter2.x, state: fighter2.state, hp: fighter2.hp } }; },
   meterTest: function (n) { fighter1.meter = 0; for (var i = 0; i < n; i++) update(); return { meter: fighter1.meter }; },
   landCounter: function () {
     // Yorick(f1) lands one counter on Max(f2) via the feint
