@@ -329,6 +329,7 @@ function createFighter(charDef, x, facing, controls) {
     money: 500, bribedTimer: 0,
     steam: 0, steamBonus: 0, noJumpTimer: 0, rootTimer: 0, faults: 0,
     film: 8, reloadTimer: 0, invertTimer: 0, cloneTimer: 0,
+    mood: 'egal', moodTimer: 0, intangible: 0, lastMove: null,
   };
 }
 
@@ -353,6 +354,8 @@ function spawnPopup(x, y, text, color) {
   popups.push({ x: x, y: y, text: text, color: color, life: 45 });
 }
 
+var MOOD_LABEL = { turbo: 'TURBO', riesin: 'RIESIN', winzling: 'WINZLING', glas: 'GLASKANONE', mond: 'MONDSCHWERKRAFT', egal: 'EGAL' };
+function moodScale(f) { return f.mood === 'riesin' ? 1.3 : f.mood === 'winzling' ? 0.7 : 1; }
 function mv0(f, type) { return f.charDef.moves[type]; }
 function startAttack(f, type) {
   // Ben can only spend money he actually has
@@ -367,6 +370,16 @@ function startAttack(f, type) {
   f.hitCount = 0;
   f.lastHitFrame = -99;
   f.blocking = false;
+  // Bin's copy-paste: her forward punch becomes the opponent's last attack
+  if (type === 'fwd_punch' && f.charDef.id === 'bin') {
+    var copyOpp = f === fighter1 ? fighter2 : fighter1;
+    var base = f.baseCharDef || f.charDef;
+    f.baseCharDef = base;
+    var copied = copyOpp.lastMove ? Object.assign({}, copyOpp.lastMove, { name: 'Copy-Paste: ' + copyOpp.lastMove.name, cost: 0 }) : base.moves.fwd_punch;
+    f.charDef = Object.assign({}, base, { moves: Object.assign({}, base.moves, { fwd_punch: copied }) });
+    spawnPopup(f.x + FIGHTER_WIDTH / 2, f.y - 10, copyOpp.lastMove ? 'STRG+V: ' + copyOpp.lastMove.name : 'NICHTS KOPIERT', '#e6e6e6');
+  }
+  if (type !== 'special' && type !== 'parry') f.lastMove = f.charDef.moves[type];
   // Felix: camera moves expose one frame of film
   if (mv0(f, type) && mv0(f, type).film) f.film = Math.max(0, f.film - mv0(f, type).film);
   f.cloneHitCount = 0; f.cloneLastHit = -99;
@@ -450,6 +463,14 @@ function updateFighter(f) {
   if (f.bribedTimer > 0) f.bribedTimer--;
   if (f.invertTimer > 0) f.invertTimer--;
   if (f.cloneTimer > 0) f.cloneTimer--;
+  if (f.intangible > 0) f.intangible--;
+  // Bin's mood: rerolled every 8 seconds
+  if (f.charDef.id === 'bin' && --f.moodTimer <= 0) {
+    var moods = ['turbo', 'riesin', 'winzling', 'glas', 'mond', 'egal'].filter(function (m) { return m !== f.mood; });
+    f.mood = moods[Math.floor(Math.random() * moods.length)];
+    f.moodTimer = 480;
+    spawnPopup(f.x + FIGHTER_WIDTH / 2, f.y - 30, MOOD_LABEL[f.mood] + '!', '#ff7ad9');
+  }
   if (f.markTimer > 0) {
     f.markTimer--;
     if (globalTime % 6 === 0) spawnParticles(f.x + FIGHTER_WIDTH / 2, f.y - 6, '#f5d76e', 1, 1);
@@ -515,6 +536,7 @@ function updateFighter(f) {
       }
     }
     var targetVx = 0;
+    if (f.mood === 'turbo') spdMult *= 2;
     if (f.rootTimer > 0) { /* red signal: rooted in place */ }
     else if (keys.has(c.left)) targetVx = -f.charDef.stats.speed * spdMult;
     else if (keys.has(c.right)) targetVx = f.charDef.stats.speed * spdMult;
@@ -573,7 +595,7 @@ function updateFighter(f) {
   }
 
   // Gravity
-  f.vy += GRAVITY;
+  f.vy += f.mood === 'mond' ? GRAVITY * 0.35 : GRAVITY;
   f.y += f.vy;
   if (f.y >= GROUND_Y) {
     f.y = GROUND_Y;
@@ -650,6 +672,20 @@ function updateFighter(f) {
     }
     // Ben: paid summons and thrown valuables, released as the move goes active
     if (move.spawn && preTimer < move.active[0] && f.stateTimer >= move.active[0]) spawnBenObject(f, move);
+    // Bin's glitch: either teleport behind the opponent or phase out for a second
+    if (move.glitch && preTimer < move.active[0] && f.stateTimer >= move.active[0]) {
+      for (var gi = 0; gi < 3; gi++) spawnParticles(f.x + FIGHTER_WIDTH / 2, f.y + 40 + gi * 40, ['#ff00ff', '#00ffff', '#ffffff'][gi], 6, 5);
+      if (Math.random() < 0.5) {
+        var behind = f.x < opp.x ? 1 : -1;
+        f.x = Math.max(0, Math.min(CANVAS_W - FIGHTER_WIDTH, opp.x + behind * (FIGHTER_WIDTH + 12)));
+        f.facing = -behind;
+        spawnPopup(f.x + FIGHTER_WIDTH / 2, f.y - 10, 'TELEPORT', '#00ffff');
+      } else {
+        f.intangible = 60;
+        spawnPopup(f.x + FIGHTER_WIDTH / 2, f.y - 10, 'GLITCH', '#ff00ff');
+      }
+      playSound('rewind');
+    }
     // Stomp shockwave: the ground impact sends a short tremor along the floor
     if (move.stompWave && f.grounded && preTimer < move.active[0] && f.stateTimer >= move.active[0]) {
       projectiles.push({
@@ -664,7 +700,7 @@ function updateFighter(f) {
       if (f.state !== 'special' || move.cooldown) {
         f.cooldowns[f.state] = f.grounded ? (move.cooldown || 0) : Math.round((move.cooldown || 0) * 0.5);
       }
-      var wasKickWhiff = (f.state === 'kick' || f.state === 'fwd_kick') && f.grounded && !f.hasHit && !move.spawnRail && !move.spawnBarrier && !move.spawn;
+      var wasKickWhiff = (f.state === 'kick' || f.state === 'fwd_kick') && f.grounded && !f.hasHit && !move.spawnRail && !move.spawnBarrier && !move.spawn && !move.glitch;
       var wasCommitWhiff = move.whiffPunish && f.grounded && !f.hasHit;
       var whiffLag = wasCommitWhiff ? (move.whiffStun || 30) : WHIFF_STUN;
       var wasParryStunned = f.parryStunned;
@@ -713,6 +749,9 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
 
   var hx = defender.x + FIGHTER_WIDTH / 2;
   var hy = defender.y + FIGHTER_HEIGHT * 0.3;
+
+  // Bin's glitch: attacks pass straight through her
+  if (defender.intangible > 0) { spawnPopup(hx, hy - 30, 'DANEBEN', '#ff00ff'); return; }
 
   // Parry check
   var parried = defender.state === 'parry' && defender.stateTimer <= PARRY_ACTIVE && !ignoreBlock;
@@ -788,6 +827,8 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
   if (attacker.hyperTimer > 0 && attacker.hyperMove) {
     finalDmg = Math.max(1, Math.round(finalDmg * (attacker.hyperMove.dmgMult || 1)));
   }
+  if (attacker.mood === 'glas') finalDmg *= 2;
+  if (defender.mood === 'glas') finalDmg *= 2;
   if (bribed) finalDmg = 0;
   defender.hp = Math.max(0, defender.hp - finalDmg);
   defender.hitFlash = 8;
@@ -940,9 +981,16 @@ function startCinematic(attacker, defender, kind, dmg) {
     defender: defender,
     dmg: dmg,
     timer: 0,
-    total: kind === 'max' ? 310 : kind === 'nova' ? 570 + 1170 + 160 : kind === 'lisa' ? 340 : 300,
+    total: kind === 'max' ? 310 : kind === 'nova' ? 570 + 1170 + 160 : kind === 'lisa' ? 340 : kind === 'bin' ? 600 : 300,
     flash: 1,
   };
+  if (kind === 'bin') {
+    // wild card: random summon, random damage
+    var pool = CHARACTERS.filter(function (c) { return c.id !== 'bin'; });
+    cinematic.summon = pool[Math.floor(Math.random() * pool.length)];
+    cinematic.dmg = 25 + Math.floor(Math.random() * 21);
+    cinematic.frozenAX = attacker.x; cinematic.frozenDX = defender.x;
+  }
   attacker.vx = 0; attacker.vy = 0; attacker.grounded = true; attacker.y = GROUND_Y;
   defender.vx = 0; defender.vy = 0; defender.grounded = true; defender.y = GROUND_Y;
   prevGameState = gameState;
@@ -987,6 +1035,14 @@ function updateCinematic() {
     if (T === 1216) { playSound('select'); shake = 5; spawnParticles(mid + 30, 280, '#f5d76e', 8, 3); } // CLICK piercing applied
     if (T === 1230) playSound('confirm');                  // "fertig, sieht gut aus"
     if (T === 1708) { playSound('boom'); playSound('ko'); shake = 30; cin.flash = 1; spawnParticles(mid, 320, '#ff3b3b', 30, 9); } // surprise punch
+  } else if (cin.kind === 'bin') {
+    if (T === 1) playSound('rewind');
+    if (T === 90) playSound('whoosh');
+    if (T === 250 || T === 300) playSound('special');
+    if (T === 330) { playSound('confirm'); cin.flash = 0.7; }
+    if (T >= 380 && T < 490 && T % 12 === 0) { playSound(T % 24 ? 'hit' : 'slash'); shake = 12; spawnParticles(CANVAS_W / 2 + 240, 380 + Math.random() * 120, ['#ff7ad9', '#ffe066', '#4fc3f7'][T % 3], 10, 7); }
+    if (T === 490) { playSound('boom'); playSound('ko'); shake = 34; }
+    if (T === 560) playSound('select');
   } else if (cin.kind === 'lisa') {
     if (T === 60) playSound('whoosh');                     // engine start
     if (T === 190) { playSound('boom'); shake = 22; cin.flash = 0.6; } // Zweitbremse
@@ -1012,6 +1068,9 @@ function updateCinematic() {
 function checkMeleeHit(attacker, defender) {
   if (!isAttackState(attacker)) return;
   var move = attacker.charDef.moves[attacker.state];
+  if (defender.intangible > 0) return;
+  var reachMult = moodScale(attacker) * (defender.mood === 'winzling' ? 0.8 : 1);
+  if (reachMult !== 1 && move.range) move = Object.assign({}, move, { range: move.range * reachMult });
   if (move.type === 'projectile' || move.type === 'rewind' || move.type === 'hyper' || move.type === 'crossing' || move.type === 'moneyrain' || move.type === 'clone') return;
   var maxHits = move.hits || 1;
   if ((attacker.hitCount || 0) >= maxHits) return;
@@ -1259,6 +1318,10 @@ function updateProjectiles() {
     } else if (globalTime % 3 === 0) {
       particles.push({ x: p.x, y: p.y, vx: -p.vx * 0.1, vy: (Math.random() - 0.5) * 1, life: 12, maxLife: 12, color: p.type === 'toast' ? '#e6b35c' : '#7f8c8d', size: 3 });
     }
+    if (p.type === 'roller' && !p.bounced && (p.x < p.r || p.x > CANVAS_W - p.r)) {
+      p.bounced = true; p.vx = -p.vx;
+      spawnParticles(p.x, p.y, '#ccc', 8, 4); playSound('hit');
+    }
     var blocked = stageObjects.some(function (o) { return o.type === 'barrier' && o.owner !== p.owner && Math.abs(p.x - o.x) < 16; });
     if (blocked) {
       spawnParticles(p.x, p.y, '#e2001a', 10, 4);
@@ -1279,6 +1342,7 @@ function updateProjectiles() {
       if (p.life <= 0) { projectiles.splice(i, 1); continue; }
     }
     // Projectile interactions during a defender's active move frames
+    if (target.intangible > 0) hitsTarget = false;
     var tMove = isAttackState(target) ? target.charDef.moves[target.state] : null;
     var tActive = tMove && tMove.active && target.stateTimer >= tMove.active[0] && target.stateTimer <= tMove.active[1];
     if (hitsTarget && tMove && tActive && tMove.projectileImmune) {
@@ -1452,6 +1516,13 @@ function spawnBenObject(f, move) {
     stageObjects.push({ type: 'bodyguard', x: fx + f.facing * 30, owner: f, facing: f.facing, age: 0, phase: 'walk', t: 0, dmg: paid ? 12 : 6 });
   } else if (move.spawn === 'bribe') {
     projectiles.push({ x: fx + f.facing * 30, y: fy, vx: 9 * f.facing, dmg: 2, type: 'bribe', owner: f, rotation: 0, bribe: paid ? 120 : 60 });
+  } else if (move.spawn === 'roller') {
+    var kinds = [
+      { kind: 'tonne', r: 22, v: 7, dmg: 9 }, { kind: 'bowling', r: 14, v: 11, dmg: 8 },
+      { kind: 'melone', r: 18, v: 8, dmg: 6 }, { kind: 'kuehlschrank', r: 30, v: 4, dmg: 16 },
+    ];
+    var kd = kinds[Math.floor(Math.random() * kinds.length)];
+    projectiles.push({ x: fx + f.facing * 40, y: FLOOR_Y - kd.r, vx: kd.v * f.facing, dmg: kd.dmg, type: 'roller', kind: kd.kind, r: kd.r, owner: f, rotation: 0 });
   } else if (move.spawn === 'selftimer') {
     stageObjects = stageObjects.filter(function (o) { return !(o.type === 'selftimer' && o.owner === f); });
     stageObjects.push({ type: 'selftimer', x: Math.max(30, Math.min(CANVAS_W - 30, fx + f.facing * 50)), facing: f.facing, owner: f, age: 0 });
@@ -1732,6 +1803,7 @@ function resetFightersForRound() {
     f.steam = 0; f.steamBonus = 0; f.noJumpTimer = 0; f.rootTimer = 0;
     f.money = 500; f.bribedTimer = 0;
     f.film = 8; f.reloadTimer = 0; f.invertTimer = 0; f.cloneTimer = 0;
+    f.mood = 'egal'; f.moodTimer = 0; f.intangible = 0;
   });
   projectiles = []; particles = []; popups = []; stageObjects = [];
   roundTimer = 99; history = []; rewindEffect = 0; rewindGhosts = []; slowmo = 0;
@@ -1956,12 +2028,24 @@ function drawFighter(f) {
 
   ctx.save();
   ctx.translate(f.x + FIGHTER_WIDTH / 2, f.y);
+  var ms = moodScale(f);
+  if (ms !== 1) { ctx.translate(0, FIGHTER_HEIGHT); ctx.scale(ms, ms); ctx.translate(0, -FIGHTER_HEIGHT); }
+  if (f.intangible > 0) { ctx.globalAlpha = 0.35 + 0.3 * Math.random(); ctx.translate((Math.random() - 0.5) * 8, 0); }
   ctx.scale(f.facing, 1);
   ctx.translate(-FIGHTER_WIDTH / 2, 0);
   if (f.invertTimer > 0) ctx.filter = 'invert(1)';
   f.charDef.draw(ctx, f, FIGHTER_WIDTH, FIGHTER_HEIGHT);
   ctx.filter = 'none';
   ctx.restore();
+
+  if (f.charDef.id === 'bin') {
+    ctx.save(); ctx.textAlign = 'center'; ctx.font = 'bold 12px monospace';
+    ctx.fillStyle = '#ff7ad9'; ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
+    var mtxt = 'Laune: ' + MOOD_LABEL[f.mood];
+    var mtop = f.y + FIGHTER_HEIGHT - FIGHTER_HEIGHT * moodScale(f) - 76;
+    ctx.strokeText(mtxt, f.x + FIGHTER_WIDTH / 2, mtop); ctx.fillText(mtxt, f.x + FIGHTER_WIDTH / 2, mtop);
+    ctx.restore();
+  }
 
   // Felix' double-exposure ghost
   if (f.cloneTimer > 0 && f.cloneX != null) {
@@ -2404,6 +2488,126 @@ function drawDrivingCar(x, y, opp, lisa, shakeY) {
   ctx.restore();
 }
 
+function drawPlayingCard(x, y, wC, hC, angle, faceUp, summon, T) {
+  ctx.save(); ctx.translate(x, y); ctx.rotate(angle);
+  ctx.fillStyle = faceUp ? '#fbf8f0' : '#7a0f2e';
+  ctx.fillRect(-wC / 2, -hC / 2, wC, hC);
+  ctx.strokeStyle = '#111'; ctx.lineWidth = Math.max(1, wC / 40); ctx.strokeRect(-wC / 2, -hC / 2, wC, hC);
+  if (!faceUp) {
+    ctx.strokeStyle = '#e6c15a'; ctx.lineWidth = Math.max(1, wC / 60);
+    ctx.strokeRect(-wC / 2 + wC * 0.08, -hC / 2 + wC * 0.08, wC * 0.84, hC - wC * 0.16);
+    ctx.font = 'bold ' + Math.round(wC * 0.4) + 'px monospace'; ctx.textAlign = 'center'; ctx.fillStyle = '#e6c15a';
+    ctx.fillText('?', 0, wC * 0.14);
+  } else if (summon) {
+    ctx.save(); ctx.beginPath(); ctx.rect(-wC / 2 + 8, -hC / 2 + 30, wC - 16, hC - 90); ctx.clip();
+    ctx.fillStyle = summon.palette.primary; ctx.globalAlpha = 0.25; ctx.fillRect(-wC / 2, -hC / 2, wC, hC); ctx.globalAlpha = 1;
+    drawActor(summon, 0, hC / 2 - 60, 1, (hC - 90) / FIGHTER_HEIGHT * 0.95, mkActor(summon, 'win', T));
+    ctx.restore();
+    ctx.fillStyle = '#d0021b'; ctx.font = 'bold 26px monospace'; ctx.textAlign = 'left';
+    ctx.fillText('★', -wC / 2 + 8, -hC / 2 + 26);
+    ctx.textAlign = 'center'; ctx.font = 'bold 22px monospace'; ctx.fillStyle = '#111';
+    ctx.fillText(summon.name.toUpperCase(), 0, hC / 2 - 22);
+  }
+  ctx.restore();
+}
+
+function drawBinSuper(cin) {
+  var T = cin.timer;
+  var bin = cin.attacker.charDef, opp = cin.defender.charDef, sum = cin.summon;
+  var CX = CANVAS_W / 2, i;
+  if (T < 90) {
+    // time stops: the frozen fight, desaturated and glitching
+    ctx.save(); ctx.filter = 'grayscale(1) contrast(1.2)';
+    drawBackground();
+    drawActor(bin, cin.frozenAX + FIGHTER_WIDTH / 2, FLOOR_Y, cin.attacker.facing, 1, mkActor(bin, 'special', 10));
+    drawActor(opp, cin.frozenDX + FIGHTER_WIDTH / 2, FLOOR_Y, cin.defender.facing, 1, mkActor(opp, 'hit', 4));
+    ctx.restore();
+    for (i = 0; i < 8; i++) {
+      var gy = Math.random() * CANVAS_H, gh = 6 + Math.random() * 40;
+      ctx.drawImage(canvas, 0, gy, CANVAS_W, gh, (Math.random() - 0.5) * 60 * (T / 90), gy, CANVAS_W, gh);
+    }
+    ctx.fillStyle = 'rgba(255,0,255,' + (0.08 * Math.random()) + ')'; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    cinCaption('ZEIT: ANGEHALTEN', '#ff7ad9');
+    return;
+  }
+  // deep space backdrop
+  ctx.fillStyle = '#05030c'; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  for (i = 0; i < 140; i++) {
+    var sx = (i * 977 + T * (1 + i % 3)) % CANVAS_W, sy = (i * 431) % CANVAS_H;
+    ctx.fillStyle = 'rgba(255,255,255,' + (0.3 + (i % 5) * 0.14) + ')'; ctx.fillRect(sx, sy, 2, 2);
+  }
+  if (T < 250) {
+    // the universe shuffles: a spiral of cards around a floating, bored Bin
+    var bob = Math.sin(T * 0.06) * 10;
+    for (i = 0; i < 90; i++) {
+      var a = i * 0.45 + T * 0.035 * (1 + (i % 3) * 0.3);
+      var rad = 90 + ((i * 37 + T * 2) % 420);
+      drawPlayingCard(CX + Math.cos(a) * rad * 1.4, 330 + Math.sin(a) * rad * 0.55, 26, 38, a * 1.7, i % 4 !== 0, null, T);
+    }
+    drawActor(bin, CX, 540 + bob, 1, 2.0, mkActor(bin, 'idle', 0));
+    cinCaption('*mischt das Universum. Gelangweilt.*', '#e6e6e6');
+    return;
+  }
+  if (T < 370) {
+    // the draw: a giant card turns over in slow motion
+    var pr = Math.min(1, (T - 250) / 80);
+    var flip = Math.cos(pr * Math.PI);
+    var cw = 260 * Math.abs(flip) + 2;
+    ctx.save(); ctx.translate(CX, 330); ctx.scale(1, 1);
+    var glow = ctx.createRadialGradient(0, 0, 40, 0, 0, 380);
+    glow.addColorStop(0, 'rgba(255,122,217,' + (0.35 * pr) + ')'); glow.addColorStop(1, 'rgba(255,122,217,0)');
+    ctx.fillStyle = glow; ctx.fillRect(-400, -400, 800, 800);
+    ctx.restore();
+    ctx.save(); ctx.translate(CX, 330); ctx.scale(cw / 260, 1);
+    drawPlayingCard(0, 0, 260, 380, 0, flip < 0, sum, T);
+    ctx.restore();
+    if (T >= 330) {
+      ctx.save(); ctx.textAlign = 'center'; ctx.font = 'bold 44px monospace';
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 7; ctx.fillStyle = '#ff7ad9';
+      var txt = 'WILD CARD: ' + sum.name.toUpperCase();
+      ctx.strokeText(txt, CX, 580); ctx.fillText(txt, CX, 580);
+      ctx.restore();
+    }
+    return;
+  }
+  if (T < 490) {
+    // the summon: the drawn fighter rises giant from the card and goes off
+    var rise = Math.min(1, (T - 370) / 30);
+    var moves = ['special', 'fwd_punch', 'fwd_kick', 'kick', 'punch'];
+    var mvName = moves[Math.floor((T - 370) / 24) % moves.length];
+    for (i = 0; i < 5; i++) {
+      var ex = 200 + ((i * 263 + Math.floor(T / 10) * 97) % 900), ey = 150 + ((i * 151 + Math.floor(T / 10) * 53) % 350);
+      if ((T + i * 7) % 20 < 10) cinSpark(ex, ey, 40 + ((T * 3 + i * 17) % 40), ['#ff7ad9', '#ffe066', '#ff6a00', '#4fc3f7', '#ffffff'][i]);
+    }
+    drawActor(sum, CX - 140, cinLerp(900, 640, rise), 1, 3.3, mkActor(sum, mvName, (T - 370) % 24));
+    drawActor(opp, CX + 260, 600, -1, 1.7, mkActor(opp, 'hit', (T % 12) < 6 ? 6 : 12), Math.sin(T * 0.5) * 0.25);
+    drawActor(bin, 120, 640, 1, 1.2, mkActor(bin, 'idle', 0));
+    cinCaption('„' + sum.moves.special.name + '“', '#ffe066');
+    return;
+  }
+  if (T < 560) {
+    // supernova
+    var nv = (T - 490) / 70;
+    var g = ctx.createRadialGradient(CX, 340, 0, CX, 340, 60 + nv * 1100);
+    g.addColorStop(0, '#ffffff'); g.addColorStop(0.25, '#fff2a8'); g.addColorStop(0.55, 'rgba(255,106,0,0.9)'); g.addColorStop(1, 'rgba(120,0,90,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    for (i = 0; i < 24; i++) {
+      var ra = i / 24 * Math.PI * 2 + T * 0.02;
+      ctx.strokeStyle = 'rgba(255,255,255,' + (1 - nv) + ')'; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(CX + Math.cos(ra) * nv * 200, 340 + Math.sin(ra) * nv * 200);
+      ctx.lineTo(CX + Math.cos(ra) * nv * 900, 340 + Math.sin(ra) * nv * 900); ctx.stroke();
+    }
+    return;
+  }
+  // aftermath: "ok."
+  ctx.fillStyle = '#0b0b10'; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+  drawActor(opp, CX + 160, 600, -1, 1.8, mkActor(opp, 'ko', 0));
+  drawActor(bin, CX - 120, 600, 1, 1.8, mkActor(bin, 'idle', 0));
+  ctx.save(); ctx.textAlign = 'center'; ctx.font = 'bold 64px monospace'; ctx.fillStyle = '#fff';
+  ctx.fillText('ok.', CX - 120, 240);
+  ctx.restore();
+}
+
 function drawLisaSuper(cin) {
   var T = cin.timer;
   var lisa = cin.attacker.charDef, opp = cin.defender.charDef;
@@ -2656,7 +2860,7 @@ function drawSuperBanner(cin) {
   ctx.fillStyle = '#fff';
   ctx.fillText(name, x, 54);
   ctx.font = 'bold 20px monospace';
-  ctx.fillStyle = cin.kind === 'max' ? '#9fe06a' : cin.kind === 'lisa' ? '#d7f02a' : '#ff6f91';
+  ctx.fillStyle = cin.kind === 'max' ? '#9fe06a' : cin.kind === 'lisa' ? '#d7f02a' : cin.kind === 'bin' ? '#ff7ad9' : '#ff6f91';
   ctx.fillText('★ ' + who + ' ★', CANVAS_W / 2 + (1 - slide) * 500, CANVAS_H - 26);
   ctx.restore();
 }
@@ -2672,9 +2876,10 @@ function drawCinematic() {
   else { bg.addColorStop(0, '#160a18'); bg.addColorStop(1, '#05030a'); }
   ctx.fillStyle = bg; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-  if (cin.kind !== 'nova' && cin.kind !== 'lisa') drawSpeedLines(cin);
+  if (cin.kind !== 'nova' && cin.kind !== 'lisa' && cin.kind !== 'bin') drawSpeedLines(cin);
   if (cin.kind === 'max') drawMaxSuper(cin);
   else if (cin.kind === 'lisa') drawLisaSuper(cin);
+  else if (cin.kind === 'bin') drawBinSuper(cin);
   else if (cin.kind === 'nova') drawNovaSuper(cin);
   else drawLukaSuper(cin);
   drawParticles();
@@ -2980,7 +3185,7 @@ window.__sfDebug = {
     }
     return out;
   },
-  state: function () { return { money: fighter1.money, film: fighter1.film, reload: fighter1.reloadTimer, f2inv: fighter2.invertTimer, f1: { x: fighter1.x, state: fighter1.state, hp: fighter1.hp }, f2: { x: fighter2.x, state: fighter2.state, hp: fighter2.hp } }; },
+  state: function () { return { mood: fighter1.mood, intang: fighter1.intangible, money: fighter1.money, film: fighter1.film, reload: fighter1.reloadTimer, f2inv: fighter2.invertTimer, f1: { x: fighter1.x, state: fighter1.state, hp: fighter1.hp }, f2: { x: fighter2.x, state: fighter2.state, hp: fighter2.hp } }; },
   meterTest: function (n) { fighter1.meter = 0; for (var i = 0; i < n; i++) update(); return { meter: fighter1.meter }; },
   landCounter: function () {
     // Yorick(f1) lands one counter on Max(f2) via the feint
@@ -3032,6 +3237,7 @@ window.__sfDebug = {
       f2: { x: fighter2.x, facing: fighter2.facing, state: fighter2.state, hp: fighter2.hp },
     };
   },
+  setMood: function (m) { fighter1.mood = m; fighter1.moodTimer = 99999; },
   step: function (n) { for (var i = 0; i < n; i++) update(); },
   runAt: function (which, type, gap, frames) {
     fighter1.x = 300; fighter2.x = 300 + gap; fighter1.facing = 1; fighter2.facing = -1;
