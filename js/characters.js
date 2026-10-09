@@ -1510,6 +1510,50 @@ const CHARACTERS = [
       });
     },
   },
+  {
+    id: 'ben', name: 'Ben', title: 'Der Millionärssohn',
+    palette: { skin: '#f0c8a8', hair: '#7a4a2a', primary: '#f4f4f2', secondary: '#2a2a2e', accent: '#d4af37', outline: '#16161a' },
+    stats: { speed: 2.1, jumpVel: -10.6, health: 95 },
+    moves: {
+      punch: { name: 'Scheinklatsche', anim: 'slap', dmg: 4, hits: 2, hitGap: 6, range: 110, total: 20, active: [5, 14], cooldown: 14, knockback: 2, fx: '#3fae5a' },
+      kick: { name: 'Leibwächter', anim: 'snapjab', dmg: 0, range: 0, total: 22, active: [8, 10], cooldown: 120, knockback: 0, spawn: 'bodyguard', cost: 300, fx: '#111' },
+      fwd_punch: { name: 'Bestechung', anim: 'flashjab', dmg: 0, range: 0, total: 22, active: [7, 9], cooldown: 80, knockback: 0, spawn: 'bribe', cost: 200, fx: '#3fae5a' },
+      fwd_kick: { name: 'Goldene Kreditkarte', anim: 'snapjab', dmg: 0, range: 0, total: 24, active: [8, 10], cooldown: 60, knockback: 0, spawn: 'card', fx: '#d4af37' },
+      special: { name: 'Geldregen', dmg: 8, range: 0, total: 30, active: [8, 10], type: 'moneyrain' },
+    },
+    draw(ctx, fighter, w, h) {
+      drawHumanoid(ctx, w, h, fighter, this.palette, ({ w, h, cx, headR, torsoY, torsoH, hipY, frontFist, backFist }) => {
+        // pink chest print
+        ctx.fillStyle = '#f2b8c6'; ctx.fillRect(cx + w * 0.02, torsoY + torsoH * 0.18, w * 0.16, torsoH * 0.22);
+        ctx.fillStyle = '#b05a78'; ctx.fillRect(cx + w * 0.05, torsoY + torsoH * 0.22, w * 0.1, torsoH * 0.08);
+        // gold chain
+        ctx.strokeStyle = '#d4af37'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(cx - w * 0.11, torsoY + 1); ctx.quadraticCurveTo(cx, torsoY + h * 0.08, cx + w * 0.11, torsoY + 1); ctx.stroke();
+        // brown belt with gold buckle, cash bundle in the pocket
+        ctx.fillStyle = '#7a4a22'; ctx.fillRect(w * 0.18, hipY - 6, w * 0.64, 6);
+        ctx.fillStyle = '#d4af37'; ctx.fillRect(cx - 4, hipY - 7, 8, 8);
+        ctx.fillStyle = '#3fae5a'; ctx.fillRect(cx + w * 0.16, hipY + 2, 8, 10);
+        // styled-up brown quiff
+        ctx.fillStyle = '#7a4a2a';
+        for (let i = -2; i <= 2; i++) {
+          ctx.beginPath(); ctx.arc(cx + i * headR * 0.38, headR * (0.2 + Math.abs(i) * 0.12), headR * 0.36, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.fillStyle = '#9a6238';
+        ctx.beginPath(); ctx.arc(cx + headR * 0.2, headR * 0.05, headR * 0.22, 0, Math.PI * 2); ctx.fill();
+        // gold watch
+        ctx.fillStyle = '#d4af37'; ctx.fillRect(backFist.x - 5, backFist.y - 7, 10, 4);
+        if (fighter.state === 'punch' || fighter.state === 'fwd_punch') {
+          // cash bundle / banknote in hand
+          ctx.fillStyle = '#3fae5a'; ctx.fillRect(frontFist.x - 4, frontFist.y - 12, 16, 9);
+          ctx.fillStyle = '#d4af37'; ctx.fillRect(frontFist.x + 2, frontFist.y - 12, 3, 9);
+        } else if (fighter.state === 'special' || fighter.state === 'kick') {
+          // phone: calling the heli / the bodyguard
+          ctx.fillStyle = '#111'; ctx.fillRect(frontFist.x - 3, frontFist.y - 14, 8, 14);
+          ctx.fillStyle = '#4fc3f7'; ctx.fillRect(frontFist.x - 2, frontFist.y - 12, 6, 9);
+        }
+      });
+    },
+  },
 ];
 
 function drawProjectile(ctx, p) {
@@ -1520,6 +1564,15 @@ function drawProjectile(ctx, p) {
     ctx.fillStyle = '#7f8c8d'; ctx.fillRect(-14, -3, 28, 6);
     ctx.fillStyle = '#3498db'; ctx.fillRect(-12, -14, 24, 11);
     ctx.strokeStyle = '#bdc3c7'; ctx.strokeRect(-12, -14, 24, 11);
+  } else if (p.type === 'bribe') {
+    ctx.rotate(Math.sin(p.rotation) * 0.4 - p.rotation);
+    ctx.fillStyle = '#b48ad8'; ctx.fillRect(-16, -8, 32, 16);
+    ctx.strokeStyle = '#6d4a91'; ctx.lineWidth = 1.5; ctx.strokeRect(-16, -8, 32, 16);
+    ctx.fillStyle = '#3d2457'; ctx.font = 'bold 9px monospace'; ctx.textAlign = 'center'; ctx.fillText('500€', 0, 3);
+  } else if (p.type === 'card') {
+    ctx.fillStyle = '#d4af37'; ctx.fillRect(-14, -9, 28, 18);
+    ctx.fillStyle = '#8a6d1a'; ctx.fillRect(-14, -4, 28, 3);
+    ctx.fillStyle = '#fff3c4'; ctx.fillRect(-10, 3, 6, 4);
   } else if (p.type === 'wreckball') {
     ctx.rotate(-(p.rotation || 0));
     ctx.strokeStyle = '#555'; ctx.lineWidth = 3; ctx.setLineDash([5, 3]);
@@ -1577,5 +1630,20 @@ function drawProjectile(ctx, p) {
   ctx.restore();
 }
 
-window.SF = { FIGHTER_WIDTH, FIGHTER_HEIGHT, CHARACTERS, drawProjectile };
+// Ben's hired muscle: not selectable, drawn by the stage-object system
+const BODYGUARD = {
+  id: 'bodyguard', name: 'Leibwächter',
+  palette: { skin: '#d9a77c', hair: '#1a1a1a', primary: '#16161a', secondary: '#16161a', outline: '#000' },
+  moves: { punch: { anim: 'jab', dmg: 0, range: 0, total: 20, active: [6, 10] } },
+  draw(ctx, fighter, w, h) {
+    drawHumanoid(ctx, w, h, fighter, this.palette, ({ w, cx, headR, torsoY, torsoH }) => {
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.moveTo(cx - w * 0.06, torsoY); ctx.lineTo(cx + w * 0.06, torsoY); ctx.lineTo(cx, torsoY + torsoH * 0.4); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#16161a'; ctx.fillRect(cx - 1.5, torsoY + 4, 3, torsoH * 0.3);
+      ctx.fillStyle = '#000'; ctx.fillRect(cx + headR * 0.05, headR * 0.88, headR * 0.85, headR * 0.3);
+    });
+  },
+};
+
+window.SF = { FIGHTER_WIDTH, FIGHTER_HEIGHT, CHARACTERS, drawProjectile, BODYGUARD };
 })();
