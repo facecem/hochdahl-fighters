@@ -1760,16 +1760,29 @@ function drawTitle() {
 }
 
 // --- Select Screen ---
+// Character select grid: up/down jump a row
+var SELECT_COLS = 7;
+function selectRowMove(i, dir) {
+  var len = CHARACTERS.length, n = i + dir * SELECT_COLS;
+  if (n >= len) n = i >= SELECT_COLS ? i % SELECT_COLS : len - 1;
+  else if (n < 0) n = i + SELECT_COLS < len ? i + SELECT_COLS : len - 1;
+  return n;
+}
+
 function updateSelect() {
   if (!select.p1Locked) {
     if (justPressed(P1_CONTROLS.left)) { select.p1Index = (select.p1Index + CHARACTERS.length - 1) % CHARACTERS.length; playSound('select'); }
     if (justPressed(P1_CONTROLS.right)) { select.p1Index = (select.p1Index + 1) % CHARACTERS.length; playSound('select'); }
+    if (justPressed(P1_CONTROLS.up)) { select.p1Index = selectRowMove(select.p1Index, -1); playSound('select'); }
+    if (justPressed(P1_CONTROLS.down)) { select.p1Index = selectRowMove(select.p1Index, 1); playSound('select'); }
     if (justPressed(P1_CONTROLS.punch)) { select.p1Locked = true; playSound('confirm'); }
   } else if (justPressed(P1_CONTROLS.kick)) { select.p1Locked = false; playSound('select'); }
 
   if (!select.p2Locked) {
     if (justPressed(P2_CONTROLS.left)) { select.p2Index = (select.p2Index + CHARACTERS.length - 1) % CHARACTERS.length; playSound('select'); }
     if (justPressed(P2_CONTROLS.right)) { select.p2Index = (select.p2Index + 1) % CHARACTERS.length; playSound('select'); }
+    if (justPressed(P2_CONTROLS.up)) { select.p2Index = selectRowMove(select.p2Index, -1); playSound('select'); }
+    if (justPressed(P2_CONTROLS.down)) { select.p2Index = selectRowMove(select.p2Index, 1); playSound('select'); }
     if (justPressed(P2_CONTROLS.punch)) { select.p2Locked = true; playSound('confirm'); }
   } else if (justPressed(P2_CONTROLS.kick)) { select.p2Locked = false; playSound('select'); }
 
@@ -3002,15 +3015,19 @@ function drawSelect() {
   ctx.font = 'bold 32px monospace';
   ctx.fillText('HOCHDAHL FIGHTERS', CANVAS_W / 2, 55);
 
-  var gap = 14;
-  var cardW = Math.min(200, Math.floor((CANVAS_W - 70 - (CHARACTERS.length - 1) * gap) / CHARACTERS.length));
-  var cardH = 290;
-  var totalW = CHARACTERS.length * cardW + (CHARACTERS.length - 1) * gap;
-  var startX = (CANVAS_W - totalW) / 2;
-  var cardY = 90;
+  var gap = 16;
+  var cardW = 150;
+  var cardH = 238;
+  var rowGap = 22;
+  var gridY = 82;
+  var cardY;
 
   CHARACTERS.forEach(function (c, i) {
-    var x = startX + i * (cardW + gap);
+    var row = Math.floor(i / SELECT_COLS), col = i % SELECT_COLS;
+    var inRow = Math.min(SELECT_COLS, CHARACTERS.length - row * SELECT_COLS);
+    var rowW = inRow * cardW + (inRow - 1) * gap;
+    var x = (CANVAS_W - rowW) / 2 + col * (cardW + gap);
+    cardY = gridY + row * (cardH + rowGap);
     var isHovered = select.p1Index === i || select.p2Index === i;
     var lift = isHovered ? -6 : 0;
 
@@ -3020,7 +3037,7 @@ function drawSelect() {
     ctx.strokeRect(x, cardY + lift, cardW, cardH);
 
     ctx.save();
-    ctx.translate(x + cardW / 2 - FIGHTER_WIDTH / 2, cardY + 20 + lift);
+    ctx.translate(x + cardW / 2 - FIGHTER_WIDTH / 2, cardY + 12 + lift);
     c.draw(ctx, { state: 'idle', stateTimer: 0, hitFlash: 0, charDef: c, facing: 1, animTime: globalTime + i * 25, grounded: true, blocking: false }, FIGHTER_WIDTH, FIGHTER_HEIGHT);
     ctx.restore();
 
@@ -3028,7 +3045,7 @@ function drawSelect() {
     var r = parseInt(p.slice(1, 3), 16), g = parseInt(p.slice(3, 5), 16), b = parseInt(p.slice(5, 7), 16);
     ctx.fillStyle = (r * 0.299 + g * 0.587 + b * 0.114) > 160 ? '#111' : '#fff';
     ctx.font = 'bold 22px monospace';
-    ctx.fillText(c.name, x + cardW / 2, cardY + cardH - 30 + lift);
+    ctx.fillText(c.name, x + cardW / 2, cardY + cardH - 22 + lift);
 
     if (select.p1Index === i) {
       ctx.strokeStyle = '#ffcc00';
@@ -3047,13 +3064,13 @@ function drawSelect() {
     ctx.font = 'bold 20px monospace';
     var dots = '';
     for (var d = 0; d < 1 + Math.floor(select.countdown / 15) % 3; d++) dots += '.';
-    ctx.fillText('Kampf beginnt' + dots, CANVAS_W / 2, cardY + cardH + 60);
+    ctx.fillText('Kampf beginnt' + dots, CANVAS_W / 2, CANVAS_H - 48);
   }
 
   // Controls hint
   ctx.fillStyle = '#888';
   ctx.font = '13px monospace';
-  ctx.fillText('P1: A/D wählen, F bestätigen, G zurück  |  P2: ←/→ wählen, K bestätigen, L zurück', CANVAS_W / 2, CANVAS_H - 20);
+  ctx.fillText('P1: WASD wählen, F bestätigen, G zurück  |  P2: Pfeiltasten wählen, K bestätigen, L zurück', CANVAS_W / 2, CANVAS_H - 20);
 }
 
 // --- Main Loop ---
