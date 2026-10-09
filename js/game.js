@@ -225,6 +225,7 @@ function pollGamepads() {
 let gameState = 'TITLE';
 let fighter1, fighter2;
 let projectiles = [];
+let stageObjects = []; // Niklas: barriers, rail traps, level crossing
 let particles = [];
 let popups = [];
 let roundTimer = 99;
@@ -356,6 +357,9 @@ function startAttack(f, type) {
   f.hitCount = 0;
   f.lastHitFrame = -99;
   f.blocking = false;
+  // Niklas: built-up steam powers the next attack, then vents
+  f.steamBonus = Math.floor((f.steam || 0) / 60);
+  f.steam = 0;
   if (!f.grounded) f.vx *= 0.5;
   else f.vx = 0;
   // Advancing moves (dash punch/kick) lunge the whole body forward
@@ -427,6 +431,8 @@ function updateFighter(f) {
     if (f.counterStackTimer === 0) f.counterStacks = 0;
   }
   if (f.slowTimer > 0) f.slowTimer--;
+  if (f.noJumpTimer > 0) f.noJumpTimer--;
+  if (f.rootTimer > 0) f.rootTimer--;
   if (f.markTimer > 0) {
     f.markTimer--;
     if (globalTime % 6 === 0) spawnParticles(f.x + FIGHTER_WIDTH / 2, f.y - 6, '#f5d76e', 1, 1);
@@ -457,7 +463,7 @@ function updateFighter(f) {
     var dashDir = 0;
     if (justPressed(c.left)) { if (globalTime - f.tap.left < DASH_WINDOW) dashDir = -1; f.tap.left = globalTime; }
     if (justPressed(c.right)) { if (globalTime - f.tap.right < DASH_WINDOW) dashDir = 1; f.tap.right = globalTime; }
-    if (dashDir !== 0 && f.grounded && f.dashCd === 0) {
+    if (dashDir !== 0 && f.grounded && f.dashCd === 0 && !(f.rootTimer > 0)) {
       f.vx = dashDir * f.charDef.stats.speed * 5;
       f.dashCd = 30;
       f.dashTime = 9;
@@ -466,8 +472,21 @@ function updateFighter(f) {
 
     var spdMult = f.hyperTimer > 0 && f.hyperMove ? (f.hyperMove.speedMult || 1) : 1;
     if (f.slowTimer > 0) spdMult *= 0.5;
+    // Niklas' momentum: holding forward on the ground builds steam in three stages
+    if (f.charDef.id === 'niklas') {
+      var steamFwd = keys.has(f.facing > 0 ? c.right : c.left) && f.grounded;
+      var prevLvl = Math.floor(f.steam / 60);
+      f.steam = steamFwd ? Math.min(180, f.steam + 1) : Math.max(0, f.steam - 2);
+      var lvl = Math.floor(f.steam / 60);
+      if (lvl > prevLvl) spawnPopup(f.x + FIGHTER_WIDTH / 2, f.y - 10, 'DAMPF ' + lvl + '!', '#dfe6ee');
+      spdMult *= 1 + 0.25 * lvl;
+      if (lvl > 0 && globalTime % Math.max(2, 8 - lvl * 2) === 0) {
+        particles.push({ x: f.x + FIGHTER_WIDTH / 2 - f.facing * 26, y: f.y + 20, vx: -f.facing * 1.5, vy: -1.6, life: 26, maxLife: 26, color: '#dfe6ee', size: 5 + lvl });
+      }
+    }
     var targetVx = 0;
-    if (keys.has(c.left)) targetVx = -f.charDef.stats.speed * spdMult;
+    if (f.rootTimer > 0) { /* red signal: rooted in place */ }
+    else if (keys.has(c.left)) targetVx = -f.charDef.stats.speed * spdMult;
     else if (keys.has(c.right)) targetVx = f.charDef.stats.speed * spdMult;
     if (f.dashTime > 0) {
       // preserve dash burst, just let it bleed off
@@ -481,7 +500,7 @@ function updateFighter(f) {
     }
 
     // Jump
-    if (justPressed(c.up) && f.grounded) {
+    if (justPressed(c.up) && f.grounded && !(f.noJumpTimer > 0)) {
       f.vy = f.charDef.stats.jumpVel;
       f.grounded = false;
       f.state = 'jump';
@@ -589,6 +608,16 @@ function updateFighter(f) {
     var preTimer = f.stateTimer;
     f.stateTimer += (f.hyperTimer > 0 && f.hyperMove ? (f.hyperMove.atkSpeedMult || 1) : 1);
     var move = f.charDef.moves[f.state];
+    // Niklas: the barrier comes down / the rail gets laid as the move goes active
+    if ((move.spawnBarrier || move.spawnRail) && f.grounded && preTimer < move.active[0] && f.stateTimer >= move.active[0]) {
+      var sType = move.spawnBarrier ? 'barrier' : 'rail';
+      stageObjects = stageObjects.filter(function (o) { return !(o.type === sType && o.owner === f); });
+      var sx = f.x + FIGHTER_WIDTH / 2 + f.facing * (move.spawnBarrier ? 70 : 120);
+      sx = Math.max(30, Math.min(CANVAS_W - 30, sx));
+      stageObjects.push({ type: sType, x: sx, owner: f, life: move.spawnBarrier ? 180 : 300, age: 0, facing: f.facing,
+        side: (opp.x + FIGHTER_WIDTH / 2) >= sx ? 1 : -1 });
+      playSound(move.spawnBarrier ? 'parry' : 'select');
+    }
     // Stomp shockwave: the ground impact sends a short tremor along the floor
     if (move.stompWave && f.grounded && preTimer < move.active[0] && f.stateTimer >= move.active[0]) {
       projectiles.push({
@@ -603,7 +632,7 @@ function updateFighter(f) {
       if (f.state !== 'special' || move.cooldown) {
         f.cooldowns[f.state] = f.grounded ? (move.cooldown || 0) : Math.round((move.cooldown || 0) * 0.5);
       }
-      var wasKickWhiff = (f.state === 'kick' || f.state === 'fwd_kick') && f.grounded && !f.hasHit;
+      var wasKickWhiff = (f.state === 'kick' || f.state === 'fwd_kick') && f.grounded && !f.hasHit && !move.spawnRail && !move.spawnBarrier;
       var wasCommitWhiff = move.whiffPunish && f.grounded && !f.hasHit;
       var whiffLag = wasCommitWhiff ? (move.whiffStun || 30) : WHIFF_STUN;
       var wasParryStunned = f.parryStunned;
@@ -689,6 +718,15 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
     spawnParticles(hx, hy, '#f5d76e', 12, 5);
     if (moveFlags.flashOnConsume) flashBurst = Math.max(flashBurst, 0.25);
   }
+  // Niklas: steam bonus, ticket voided, red signal; any hit vents the defender's steam
+  if (attacker.steamBonus > 0 && !isProjectile) {
+    finalDmg = Math.round(finalDmg * (1 + 0.15 * attacker.steamBonus));
+    spawnPopup(hx, hy - 76, 'VOLLE FAHRT!', '#dfe6ee');
+    attacker.steamBonus = 0;
+  }
+  defender.steam = 0;
+  if (moveFlags.noJump) { defender.noJumpTimer = moveFlags.noJump; spawnPopup(hx, hy - 58, 'ENTWERTET!', '#e2001a'); }
+  if (moveFlags.root) { defender.rootTimer = moveFlags.root; spawnPopup(hx, hy - 58, 'HALT!', '#ff2a2a'); }
   // Lisa's fault points: three strikes fail the test, the next hit punishes double
   if (moveFlags.faultPoint) {
     if ((defender.faults || 0) >= 3) {
@@ -935,7 +973,7 @@ function updateCinematic() {
 function checkMeleeHit(attacker, defender) {
   if (!isAttackState(attacker)) return;
   var move = attacker.charDef.moves[attacker.state];
-  if (move.type === 'projectile' || move.type === 'rewind' || move.type === 'hyper') return;
+  if (move.type === 'projectile' || move.type === 'rewind' || move.type === 'hyper' || move.type === 'crossing') return;
   var maxHits = move.hits || 1;
   if ((attacker.hitCount || 0) >= maxHits) return;
 
@@ -973,6 +1011,7 @@ function checkMeleeHit(attacker, defender) {
     tipBonus: move.tipBonus, counterMeter: move.counterMeter, slowOnHit: !!move.slowOnHit,
     applyMark: !!move.applyMark, consumeMark: !!move.consumeMark, flashOnConsume: !!move.flashOnConsume,
     retreat: !!move.retreat, cdRefund: move.cdRefund, faultPoint: !!move.faultPoint, drainLabel: move.drainLabel,
+    noJump: move.noJump, root: move.root,
   };
 
   // Everything is parriable in this game, including grabs/throws and cinematic supers
@@ -1139,6 +1178,9 @@ function checkProjectileSpawn(attacker) {
       meterSteal: move.meterSteal || 0,
     });
     attacker.hasHit = true;
+  } else if (move.type === 'crossing') {
+    stageObjects.push({ type: 'crossing', owner: attacker, dir: attacker.facing, age: 0, hit: false });
+    attacker.hasHit = true;
   } else if (move.type === 'shockwave') {
     projectiles.push({
       x: attacker.x + (attacker.facing > 0 ? FIGHTER_WIDTH : 0),
@@ -1165,6 +1207,14 @@ function updateProjectiles() {
       if (globalTime % 2 === 0) spawnParticles(p.x, FLOOR_Y - Math.random() * 14, '#b0a48c', 2, 2);
     } else if (globalTime % 3 === 0) {
       particles.push({ x: p.x, y: p.y, vx: -p.vx * 0.1, vy: (Math.random() - 0.5) * 1, life: 12, maxLife: 12, color: p.type === 'toast' ? '#e6b35c' : '#7f8c8d', size: 3 });
+    }
+    var blocked = stageObjects.some(function (o) { return o.type === 'barrier' && o.owner !== p.owner && Math.abs(p.x - o.x) < 16; });
+    if (blocked) {
+      spawnParticles(p.x, p.y, '#e2001a', 10, 4);
+      spawnPopup(p.x, p.y - 20, 'GESPERRT!', '#e2001a');
+      playSound('parry');
+      projectiles.splice(i, 1);
+      continue;
     }
     var target = p.owner === fighter1 ? fighter2 : fighter1;
     var tcx = target.x + FIGHTER_WIDTH / 2;
@@ -1220,6 +1270,117 @@ function updateProjectiles() {
     }
     if (p.x < -40 || p.x > CANVAS_W + 40) projectiles.splice(i, 1);
   }
+}
+
+// --- Niklas' stage objects ---
+var TRAIN_LEN = 760, TRAIN_SPEED = 46, CROSSING_WARN = 90;
+function updateStageObjects() {
+  for (var i = stageObjects.length - 1; i >= 0; i--) {
+    var o = stageObjects[i];
+    o.age++;
+    var opp = o.owner === fighter1 ? fighter2 : fighter1;
+    var ocx = opp.x + FIGHTER_WIDTH / 2;
+    if (o.type === 'barrier') {
+      // grounded opponents can't walk through; jumping over switches sides
+      if (!opp.grounded) o.side = ocx >= o.x ? 1 : -1;
+      else if (o.side > 0 && opp.x < o.x + 8) { opp.x = o.x + 8; opp.vx = Math.max(0, opp.vx); }
+      else if (o.side < 0 && opp.x + FIGHTER_WIDTH > o.x - 8) { opp.x = o.x - 8 - FIGHTER_WIDTH; opp.vx = Math.min(0, opp.vx); }
+      opp.x = Math.max(0, Math.min(CANVAS_W - FIGHTER_WIDTH, opp.x));
+      if (o.age >= o.life) stageObjects.splice(i, 1);
+    } else if (o.type === 'rail') {
+      if (opp.grounded && Math.abs(ocx - o.x) < 40 && !inState(opp, ['hit', 'thrown', 'ko'])) {
+        applyDamage(opp, 10, o.owner, 6, true, 30, false, true, { knockdown: true });
+        spawnPopup(o.x, FLOOR_Y - 120, 'STOLPERT!', '#c0c0c0');
+        spawnParticles(o.x, FLOOR_Y - 6, '#8a8a8a', 12, 5);
+        stageObjects.splice(i, 1);
+      } else if (o.age >= o.life) stageObjects.splice(i, 1);
+    } else if (o.type === 'crossing') {
+      if (o.age < CROSSING_WARN && o.age % 20 === 1) playSound('select');
+      if (o.age === CROSSING_WARN) { playSound('boom'); shake = 18; }
+      if (o.age >= CROSSING_WARN) {
+        var t = o.age - CROSSING_WARN;
+        var front = o.dir > 0 ? -60 + t * TRAIN_SPEED : CANVAS_W + 60 - t * TRAIN_SPEED;
+        o.front = front;
+        var rear = front - o.dir * TRAIN_LEN;
+        var lo = Math.min(front, rear), hi = Math.max(front, rear);
+        if (!o.hit && ocx > lo && ocx < hi && GROUND_Y - opp.y < 55 && opp.state !== 'ko') {
+          o.hit = true;
+          applyDamage(opp, o.owner.charDef.moves.special.dmg, o.owner, 18, true, 40, false, true, { knockdown: true, launcher: true });
+          opp.vx = o.dir * 14;
+          spawnPopup(ocx, opp.y - 20, 'ICE!', '#e2001a');
+          shake = 24;
+        }
+        if (o.dir > 0 ? rear > CANVAS_W + 40 : rear < -40) stageObjects.splice(i, 1);
+      }
+    }
+  }
+}
+
+function drawStageObjects(front) {
+  stageObjects.forEach(function (o) {
+    if (o.type === 'barrier' && !front) {
+      var drop = Math.min(1, o.age / 10), fade = Math.min(1, (o.life - o.age) / 20);
+      ctx.save(); ctx.globalAlpha = fade;
+      ctx.fillStyle = '#555'; ctx.fillRect(o.x - 5, FLOOR_Y - 90, 10, 90);
+      ctx.fillStyle = '#e2001a'; ctx.beginPath(); ctx.arc(o.x, FLOOR_Y - 92, 6, 0, Math.PI * 2); ctx.fill();
+      ctx.translate(o.x, FLOOR_Y - 70);
+      ctx.rotate(-o.facing * (1 - drop) * Math.PI / 2);
+      for (var k = 0; k < 6; k++) { ctx.fillStyle = k % 2 ? '#fff' : '#e2001a'; ctx.fillRect(o.facing > 0 ? k * 14 - 42 : -k * 14 + 28, -4, 14, 8); }
+      ctx.restore();
+    } else if (o.type === 'rail' && !front) {
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, (o.life - o.age) / 30);
+      ctx.fillStyle = '#6b4b2a';
+      for (var s = -36; s <= 36; s += 12) ctx.fillRect(o.x + s - 3, FLOOR_Y - 4, 6, 10);
+      ctx.fillStyle = '#b8bcc2';
+      ctx.fillRect(o.x - 42, FLOOR_Y - 6, 84, 3); ctx.fillRect(o.x - 42, FLOOR_Y + 1, 84, 3);
+      ctx.restore();
+    } else if (o.type === 'crossing') {
+      var on = Math.floor(o.age / 10) % 2 === 0;
+      if (!front) {
+        [40, CANVAS_W - 40].forEach(function (px) {
+          ctx.fillStyle = '#666'; ctx.fillRect(px - 4, FLOOR_Y - 170, 8, 170);
+          ctx.save(); ctx.translate(px, FLOOR_Y - 160);
+          [Math.PI / 5, -Math.PI / 5].forEach(function (a) { ctx.save(); ctx.rotate(a); ctx.fillStyle = '#fff'; ctx.fillRect(-34, -6, 68, 12); ctx.strokeStyle = '#e2001a'; ctx.lineWidth = 3; ctx.strokeRect(-34, -6, 68, 12); ctx.restore(); });
+          ctx.restore();
+          ctx.fillStyle = on ? '#ff2a2a' : '#3a0a0a'; ctx.beginPath(); ctx.arc(px - 12, FLOOR_Y - 118, 8, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = !on ? '#ff2a2a' : '#3a0a0a'; ctx.beginPath(); ctx.arc(px + 12, FLOOR_Y - 118, 8, 0, Math.PI * 2); ctx.fill();
+        });
+        if (o.age < CROSSING_WARN) {
+          ctx.save(); ctx.textAlign = 'center'; ctx.font = 'bold 34px monospace';
+          ctx.globalAlpha = on ? 1 : 0.5; ctx.fillStyle = '#ff2a2a'; ctx.strokeStyle = '#000'; ctx.lineWidth = 5;
+          ctx.strokeText('ZUG KOMMT – SPRING!', CANVAS_W / 2, 200); ctx.fillText('ZUG KOMMT – SPRING!', CANVAS_W / 2, 200);
+          ctx.restore();
+        }
+      } else if (o.front != null) {
+        drawTrain(o.front, o.dir);
+      }
+    }
+  });
+}
+
+function drawTrain(front, dir) {
+  ctx.save();
+  ctx.translate(front, FLOOR_Y);
+  ctx.scale(dir, 1);
+  // body runs from x=-TRAIN_LEN (rear) to 0 (nose)
+  ctx.fillStyle = '#f4f4f4'; ctx.strokeStyle = '#222'; ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(-TRAIN_LEN, -8); ctx.lineTo(-TRAIN_LEN, -150); ctx.lineTo(-90, -150);
+  ctx.quadraticCurveTo(0, -140, 10, -8); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#e2001a'; ctx.fillRect(-TRAIN_LEN, -52, TRAIN_LEN + 4, 10);
+  ctx.fillStyle = '#26323e';
+  for (var wx = -TRAIN_LEN + 30; wx < -150; wx += 70) ctx.fillRect(wx, -122, 50, 34);
+  ctx.beginPath(); ctx.moveTo(-110, -138); ctx.lineTo(-50, -134); ctx.lineTo(-30, -100); ctx.lineTo(-110, -100); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#ccc'; ctx.fillRect(-TRAIN_LEN / 2 - 3, -150, 6, 142);
+  ctx.fillStyle = '#e2001a'; ctx.font = 'bold 26px monospace'; ctx.textAlign = 'center';
+  ctx.save(); ctx.translate(-TRAIN_LEN + 120, -64); ctx.scale(dir, 1); ctx.fillText('ICE', 0, 0); ctx.restore();
+  ctx.fillStyle = '#111';
+  for (var bx = -TRAIN_LEN + 60; bx < -40; bx += 180) { ctx.beginPath(); ctx.arc(bx, -6, 12, 0, Math.PI * 2); ctx.arc(bx + 34, -6, 12, 0, Math.PI * 2); ctx.fill(); }
+  ctx.restore();
+  // motion streaks behind the rear
+  ctx.strokeStyle = 'rgba(255,255,255,0.35)'; ctx.lineWidth = 2;
+  for (var l = 0; l < 6; l++) { var ly = FLOOR_Y - 20 - l * 24; ctx.beginPath(); ctx.moveTo(front - dir * (TRAIN_LEN + 40), ly); ctx.lineTo(front - dir * (TRAIN_LEN + 200 + l * 30), ly); ctx.stroke(); }
 }
 
 function updateParticles() {
@@ -1335,7 +1496,7 @@ function startFight() {
   roundsWon = { p1: 0, p2: 0 };
   roundNumber = 1;
   roundTimer = 99;
-  projectiles = []; particles = []; popups = [];
+  projectiles = []; particles = []; popups = []; stageObjects = [];
   gameState = 'ROUND_INTRO';
   stateTimer = 0;
 }
@@ -1353,8 +1514,9 @@ function resetFightersForRound() {
     f.hyperTimer = 0; f.hyperMove = null; f.riposteReady = 0;
     f.counterStacks = 0; f.counterStackTimer = 0; f.knockedDown = false;
     f.slowTimer = 0; f.markTimer = 0; f.faults = 0;
+    f.steam = 0; f.steamBonus = 0; f.noJumpTimer = 0; f.rootTimer = 0;
   });
-  projectiles = []; particles = []; popups = [];
+  projectiles = []; particles = []; popups = []; stageObjects = [];
   roundTimer = 99; history = []; rewindEffect = 0; rewindGhosts = []; slowmo = 0;
 }
 
@@ -1425,6 +1587,7 @@ function updateFight() {
   checkHyperTrigger(fighter1);
   checkHyperTrigger(fighter2);
   updateProjectiles();
+  updateStageObjects();
 
   roundTimer -= 1 / 60;
   if (roundTimer < 0) roundTimer = 0;
@@ -1613,6 +1776,18 @@ function drawFighter(f) {
     ctx.beginPath();
     ctx.moveTo(mx, my - 7); ctx.lineTo(mx + 5, my); ctx.lineTo(mx, my + 7); ctx.lineTo(mx - 5, my);
     ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  // Niklas' debuffs: voided ticket (no jump) / red signal (rooted)
+  if (f.noJumpTimer > 0 || f.rootTimer > 0) {
+    ctx.save();
+    ctx.textAlign = 'center'; ctx.font = 'bold 12px monospace';
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
+    var dtxt = f.rootTimer > 0 ? '● HALT' : 'KEIN SPRUNG';
+    ctx.fillStyle = f.rootTimer > 0 ? '#ff2a2a' : '#ffb3b3';
+    ctx.strokeText(dtxt, f.x + FIGHTER_WIDTH / 2, f.y - 46);
+    ctx.fillText(dtxt, f.x + FIGHTER_WIDTH / 2, f.y - 46);
     ctx.restore();
   }
 
@@ -2313,9 +2488,11 @@ function drawImpactEffect() {
 
 function drawFightScene() {
   drawBackground();
+  drawStageObjects(false);
   drawFighter(fighter1);
   drawFighter(fighter2);
   projectiles.forEach(function (p) { drawProjectile(ctx, p); });
+  drawStageObjects(true);
   drawParticles();
   drawRewindOverlay();
   drawSlashStreak();

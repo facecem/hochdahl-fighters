@@ -1449,6 +1449,67 @@ const CHARACTERS = [
       });
     },
   },
+  {
+    id: 'niklas', name: 'Niklas', title: 'Der Lokführer',
+    palette: { skin: '#f1c9a8', hair: '#8a4b26', primary: '#f2f2f2', secondary: '#2b2f3a', accent: '#e2001a', outline: '#14161c' },
+    stats: { speed: 2.0, jumpVel: -10.5, health: 100 },
+    moves: {
+      punch: { name: 'Fahrkartenkontrolle', anim: 'snapjab', dmg: 5, range: 118, total: 18, active: [4, 9], cooldown: 15, knockback: 3, noJump: 120, fx: '#e2001a' },
+      kick: { name: 'Schranke runter!', anim: 'axekick', dmg: 9, range: 125, total: 30, active: [10, 18], cooldown: 70, knockback: 6, spawnBarrier: true, fx: '#e2001a' },
+      fwd_punch: { name: 'Rotes Signal', anim: 'dashpunch', dmg: 7, range: 128, total: 24, active: [7, 13], cooldown: 40, knockback: 2, root: 90, fx: '#ff2a2a' },
+      fwd_kick: { name: 'Gleis verlegen', anim: 'lowslide', dmg: 0, range: 0, total: 28, active: [10, 12], cooldown: 90, knockback: 0, spawnRail: true, fx: '#8a8a8a' },
+      special: { name: 'Bahnübergang', dmg: 30, range: 0, total: 30, active: [8, 10], type: 'crossing' },
+    },
+    draw(ctx, fighter, w, h) {
+      drawHumanoid(ctx, w, h, fighter, this.palette, ({ w, h, cx, headR, torsoY, torsoH, frontFist }) => {
+        // black shirt under the open track jacket, blue shoulder panels, zipper
+        ctx.fillStyle = '#16161a';
+        ctx.beginPath(); ctx.moveTo(cx - w * 0.1, torsoY); ctx.lineTo(cx + w * 0.1, torsoY); ctx.lineTo(cx + w * 0.03, torsoY + torsoH * 0.55); ctx.lineTo(cx - w * 0.03, torsoY + torsoH * 0.55); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#1d5fbf';
+        ctx.fillRect(w * 0.18, torsoY, w * 0.18, torsoH * 0.16);
+        ctx.fillRect(w * 0.64, torsoY, w * 0.18, torsoH * 0.16);
+        ctx.strokeStyle = '#9a9a9a'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(cx, torsoY + torsoH * 0.55); ctx.lineTo(cx, torsoY + torsoH); ctx.stroke();
+        // messy auburn fringe
+        ctx.fillStyle = '#8a4b26';
+        for (let i = -2; i <= 2; i++) {
+          const bx = cx + i * headR * 0.36;
+          ctx.beginPath(); ctx.moveTo(bx - headR * 0.22, headR * 0.7);
+          ctx.lineTo(bx + headR * (0.1 + (i & 1) * 0.12), headR * (1.05 + (i & 1) * 0.12));
+          ctx.lineTo(bx + headR * 0.24, headR * 0.7); ctx.closePath(); ctx.fill();
+        }
+        // headphones: band, ear cup, cable
+        ctx.strokeStyle = '#141414'; ctx.lineWidth = 3.5;
+        ctx.beginPath(); ctx.arc(cx, headR + 2, headR * 1.12, Math.PI * 1.08, Math.PI * 1.92); ctx.stroke();
+        ctx.fillStyle = '#141414';
+        ctx.beginPath(); ctx.ellipse(cx - headR * 0.25, headR * 1.3, headR * 0.32, headR * 0.45, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#141414'; ctx.lineWidth = 1.2;
+        ctx.beginPath(); ctx.moveTo(cx - headR * 0.25, headR * 1.7); ctx.quadraticCurveTo(cx - w * 0.05, torsoY + torsoH * 0.3, cx + w * 0.02, torsoY + torsoH * 0.7); ctx.stroke();
+        // rectangular dark glasses
+        ctx.strokeStyle = '#2a1a14'; ctx.lineWidth = 1.6;
+        ctx.strokeRect(cx + headR * 0.14, headR * 0.86, headR * 0.66, headR * 0.4);
+        ctx.beginPath(); ctx.moveTo(cx + headR * 0.14, headR * 1.0); ctx.lineTo(cx - headR * 0.05, headR * 1.05); ctx.stroke();
+        // props
+        if (fighter.state === 'punch') {
+          // ticket punch
+          ctx.fillStyle = '#9aa0a6'; ctx.fillRect(frontFist.x - 2, frontFist.y - 4, 14, 5);
+          ctx.fillRect(frontFist.x - 2, frontFist.y + 2, 14, 3);
+        } else if (fighter.state === 'fwd_punch') {
+          // red signal lamp
+          ctx.fillStyle = '#222'; ctx.fillRect(frontFist.x - 6, frontFist.y - 18, 13, 18);
+          ctx.fillStyle = '#ff2a2a'; ctx.shadowColor = '#ff2a2a'; ctx.shadowBlur = 14;
+          ctx.beginPath(); ctx.arc(frontFist.x + 0.5, frontFist.y - 9, 5, 0, Math.PI * 2); ctx.fill();
+          ctx.shadowBlur = 0;
+        } else if (fighter.state === 'special') {
+          // signal paddle raised: green disc = "Abfahrt"
+          ctx.strokeStyle = '#333'; ctx.lineWidth = 3;
+          ctx.beginPath(); ctx.moveTo(frontFist.x, frontFist.y); ctx.lineTo(frontFist.x + 3, frontFist.y - 16); ctx.stroke();
+          ctx.fillStyle = '#1aa34a'; ctx.beginPath(); ctx.arc(frontFist.x + 4, frontFist.y - 23, 8, 0, Math.PI * 2); ctx.fill();
+          ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(frontFist.x + 4, frontFist.y - 23, 3.5, 0, Math.PI * 2); ctx.fill();
+        }
+      });
+    },
+  },
 ];
 
 function drawProjectile(ctx, p) {
