@@ -689,6 +689,17 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
     spawnParticles(hx, hy, '#f5d76e', 12, 5);
     if (moveFlags.flashOnConsume) flashBurst = Math.max(flashBurst, 0.25);
   }
+  // Lisa's fault points: three strikes fail the test, the next hit punishes double
+  if (moveFlags.faultPoint) {
+    if ((defender.faults || 0) >= 3) {
+      defender.faults = 0;
+      finalDmg *= 2;
+      spawnPopup(hx, hy - 58, 'NACHPRÜFUNG!', '#e74c3c');
+    } else {
+      defender.faults = (defender.faults || 0) + 1;
+      if (defender.faults >= 3) spawnPopup(hx, hy - 58, 'DURCHGEFALLEN!', '#e74c3c');
+    }
+  }
   // Tip precision: hitting at the far end of a thrust's reach deals bonus damage
   if (moveFlags.tipHit) {
     finalDmg = Math.round(finalDmg * (moveFlags.tipBonus || 1.5));
@@ -786,7 +797,7 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
   // Meter drain: saps the defender's special meter instead of growing it
   if (moveFlags.meterDrain) {
     defender.meter = Math.max(0, defender.meter - moveFlags.meterDrain);
-    spawnPopup(hx, hy - 70, 'MÜDE...', '#9fa8c0');
+    spawnPopup(hx, hy - 70, moveFlags.drainLabel || 'MÜDE...', '#9fa8c0');
   }
 
   // Sleepy contagion: the hit makes the defender sluggish for a while
@@ -834,6 +845,8 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
   }
 
   attacker.meter = Math.min(METER_MAX, attacker.meter + finalDmg * METER_GAIN_ATTACKER * (moveFlags.meterMult || 1));
+  // Kata's commission: every deal closed pays a little extra meter
+  if (attacker.charDef.id === 'kata') attacker.meter = Math.min(METER_MAX, attacker.meter + 4);
   if (!moveFlags.meterDrain) {
     defender.meter = Math.min(METER_MAX, defender.meter + finalDmg * METER_GAIN_DEFENDER);
   }
@@ -850,7 +863,7 @@ function startCinematic(attacker, defender, kind, dmg) {
     defender: defender,
     dmg: dmg,
     timer: 0,
-    total: kind === 'max' ? 310 : kind === 'nova' ? 570 + 1170 + 160 : 300,
+    total: kind === 'max' ? 310 : kind === 'nova' ? 570 + 1170 + 160 : kind === 'lisa' ? 340 : 300,
     flash: 1,
   };
   attacker.vx = 0; attacker.vy = 0; attacker.grounded = true; attacker.y = GROUND_Y;
@@ -897,6 +910,11 @@ function updateCinematic() {
     if (T === 1216) { playSound('select'); shake = 5; spawnParticles(mid + 30, 280, '#f5d76e', 8, 3); } // CLICK piercing applied
     if (T === 1230) playSound('confirm');                  // "fertig, sieht gut aus"
     if (T === 1708) { playSound('boom'); playSound('ko'); shake = 30; cin.flash = 1; spawnParticles(mid, 320, '#ff3b3b', 30, 9); } // surprise punch
+  } else if (cin.kind === 'lisa') {
+    if (T === 60) playSound('whoosh');                     // engine start
+    if (T === 190) { playSound('boom'); shake = 22; cin.flash = 0.6; } // Zweitbremse
+    if (T === 250) { playSound('hit'); shake = 14; spawnParticles(CANVAS_W / 2 + 260, FLOOR_Y - 10, '#9a8468', 20, 7); }
+    if (T === 268) { playSound('ko'); shake = 10; }        // stamp
   } else if (cin.kind === 'max') {
     if (T === 1) shake = 12;
     if (T === 64) { playSound('uppercut'); shake = 10; spawnParticles(mid, 360, '#ffe066', 10, 5); }
@@ -954,7 +972,7 @@ function checkMeleeHit(attacker, defender) {
     swapPosition: !!move.swapPosition && isFinalHit, lifesteal: move.lifesteal, meterDrain: move.meterDrain,
     tipBonus: move.tipBonus, counterMeter: move.counterMeter, slowOnHit: !!move.slowOnHit,
     applyMark: !!move.applyMark, consumeMark: !!move.consumeMark, flashOnConsume: !!move.flashOnConsume,
-    retreat: !!move.retreat, cdRefund: move.cdRefund,
+    retreat: !!move.retreat, cdRefund: move.cdRefund, faultPoint: !!move.faultPoint, drainLabel: move.drainLabel,
   };
 
   // Everything is parriable in this game, including grabs/throws and cinematic supers
@@ -1183,9 +1201,11 @@ function updateProjectiles() {
       continue;
     }
     if (hitsTarget) {
-      var pColor = p.type === 'toast' ? '#e6b35c' : (p.type === 'shockwave' ? '#e8c547' : (p.type === 'tremor' ? '#b0a48c' : (p.type === 'flash' ? '#fff7cc' : '#3498db')));
-      var pStun = p.type === 'flash' ? 30 : 14;
-      applyDamage(target, p.dmg, p.owner, p.type === 'shockwave' ? (p.knockback || 9) : (p.type === 'flash' ? 4 : 8), false, pStun, false, true);
+      var pColor = p.type === 'toast' ? '#e6b35c' : (p.type === 'shockwave' ? '#e8c547' : (p.type === 'tremor' ? '#b0a48c' : (p.type === 'flash' ? '#fff7cc' : (p.type === 'wreckball' ? '#9a8468' : '#3498db'))));
+      var pStun = p.type === 'flash' || p.type === 'wreckball' ? 30 : 14;
+      var pKnock = p.type === 'shockwave' ? (p.knockback || 9) : (p.type === 'flash' ? 4 : (p.type === 'wreckball' ? 14 : 8));
+      applyDamage(target, p.dmg, p.owner, pKnock, false, pStun, false, true, p.type === 'wreckball' ? { knockdown: true } : undefined);
+      if (p.type === 'wreckball') { shake = Math.min(20, shake + 12); playSound('boom'); }
       if (p.type === 'flash') { target.stunned = true; flashBurst = 0.7; spawnPopup(target.x + FIGHTER_WIDTH / 2, target.y, 'GEBLENDET!', '#fff7cc'); }
       // Data theft: the laptop siphons special meter from the target to its owner
       if (p.meterSteal) {
@@ -1332,7 +1352,7 @@ function resetFightersForRound() {
     f.grounded = true; f.comboCount = 0; f.comboTimer = 0; f.airAttacked = false;
     f.hyperTimer = 0; f.hyperMove = null; f.riposteReady = 0;
     f.counterStacks = 0; f.counterStackTimer = 0; f.knockedDown = false;
-    f.slowTimer = 0; f.markTimer = 0;
+    f.slowTimer = 0; f.markTimer = 0; f.faults = 0;
   });
   projectiles = []; particles = []; popups = [];
   roundTimer = 99; history = []; rewindEffect = 0; rewindGhosts = []; slowmo = 0;
@@ -1593,6 +1613,18 @@ function drawFighter(f) {
     ctx.beginPath();
     ctx.moveTo(mx, my - 7); ctx.lineTo(mx + 5, my); ctx.lineTo(mx, my + 7); ctx.lineTo(mx - 5, my);
     ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  // Lisa's fault points: red crosses over the examinee's head
+  if (f.faults > 0) {
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillStyle = '#e74c3c'; ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
+    var ftxt = f.faults >= 3 ? 'DURCHGEFALLEN' : '✗'.repeat(f.faults);
+    ctx.strokeText(ftxt, f.x + FIGHTER_WIDTH / 2, f.y - 30);
+    ctx.fillText(ftxt, f.x + FIGHTER_WIDTH / 2, f.y - 30);
     ctx.restore();
   }
 
@@ -1910,6 +1942,85 @@ function drawLukaSuper(cin) {
   }
 }
 
+function drawDrivingCar(x, y, opp, lisa, shakeY) {
+  // side view of the driving-school car, both occupants clipped into the windows
+  ctx.save();
+  ctx.translate(x, y + shakeY);
+  ctx.fillStyle = '#e9e9ee';
+  ctx.beginPath();
+  ctx.moveTo(-230, -20); ctx.lineTo(-215, -80); ctx.lineTo(-140, -90); ctx.lineTo(-90, -160);
+  ctx.lineTo(90, -160); ctx.lineTo(150, -90); ctx.lineTo(225, -78); ctx.lineTo(235, -20); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#222'; ctx.lineWidth = 4; ctx.stroke();
+  ctx.fillStyle = '#1a4fd0'; ctx.fillRect(-228, -58, 460, 12);
+  // roof sign
+  ctx.fillStyle = '#ffd400'; ctx.fillRect(-70, -192, 140, 30);
+  ctx.strokeRect(-70, -192, 140, 30);
+  ctx.fillStyle = '#111'; ctx.font = 'bold 20px monospace'; ctx.textAlign = 'center';
+  ctx.fillText('FAHRSCHULE', 0, -170);
+  // windows with occupants
+  ctx.save();
+  ctx.beginPath(); ctx.moveTo(-80, -150); ctx.lineTo(-2, -150); ctx.lineTo(-2, -92); ctx.lineTo(-125, -92); ctx.closePath();
+  ctx.moveTo(4, -150); ctx.lineTo(84, -150); ctx.lineTo(132, -92); ctx.lineTo(4, -92); ctx.closePath();
+  ctx.fillStyle = '#9fc6e8'; ctx.fill(); ctx.clip();
+  if (lisa) drawActor(lisa, -55, 70, 1, 1.25, mkActor(lisa, 'idle', 0));
+  if (opp) drawActor(opp, 55, 70, 1, 1.25, mkActor(opp, 'hit', 4));
+  ctx.restore();
+  ctx.fillStyle = '#222'; ctx.fillRect(-1, -152, 5, 62);
+  // wheels
+  [-140, 140].forEach(function (wx) {
+    ctx.fillStyle = '#111'; ctx.beginPath(); ctx.arc(wx, -20, 36, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#999'; ctx.beginPath(); ctx.arc(wx, -20, 15, 0, Math.PI * 2); ctx.fill();
+  });
+  ctx.restore();
+}
+
+function drawLisaSuper(cin) {
+  var T = cin.timer;
+  var lisa = cin.attacker.charDef, opp = cin.defender.charDef;
+  var CX = CANVAS_W / 2;
+  // road
+  ctx.fillStyle = '#2b2d33'; ctx.fillRect(0, 520, CANVAS_W, 200);
+  ctx.fillStyle = '#e8e8e8';
+  var scroll = T < 190 ? (T * 14) % 160 : (190 * 14) % 160;
+  for (var lx = -160; lx < CANVAS_W + 160; lx += 160) ctx.fillRect(lx - scroll, 600, 80, 8);
+  if (T < 60) {
+    ctx.save(); ctx.textAlign = 'center';
+    ctx.font = 'bold 54px monospace'; ctx.fillStyle = '#fff';
+    ctx.globalAlpha = Math.min(1, T / 15);
+    ctx.fillText('PRAKTISCHE PRÜFUNG', CX, 260);
+    ctx.restore();
+    drawActor(lisa, CX - 160, 560, 1, 1.9, mkActor(lisa, 'idle', 0));
+    drawActor(opp, CX + 160, 560, -1, 1.9, mkActor(opp, 'hit', (T % 20) < 10 ? 4 : 8));
+    cinCaption('„Bitte einsteigen. Ganz ruhig bleiben.“', '#d7f02a');
+  } else if (T < 250) {
+    var carX = T < 190 ? cinLerp(-300, CX - 40, (T - 60) / 110) : CX - 40;
+    var jolt = T >= 190 && T < 205 ? Math.sin(T * 2) * 6 : 0;
+    var flying = T >= 196;
+    drawDrivingCar(carX, 600, flying ? null : opp, lisa, jolt);
+    if (flying) {
+      var fp = (T - 196) / 54;
+      var ox = cinLerp(carX + 60, CX + 330, fp), oy = 470 - Math.sin(fp * Math.PI) * 220 + fp * 110;
+      drawActor(opp, ox, oy, 1, 1.6, mkActor(opp, 'hit', 8), fp * Math.PI * 2.5);
+      if (T < 206) cinSpark(carX + 150, 470, 70, '#bfe6ff');
+    }
+    cinCaption(T < 190 ? '„Und jetzt schön in den Kreisverkehr …“' : 'ZWEITBREMSE!', T < 190 ? '#fff' : '#ff3b3b');
+  } else {
+    drawDrivingCar(CX - 40, 600, null, lisa, 0);
+    drawActor(opp, CX + 330, 600, -1, 1.6, mkActor(opp, 'ko', 0));
+    if (T >= 268) {
+      var sp = Math.min(1, (T - 268) / 10);
+      ctx.save();
+      ctx.translate(CX, 300); ctx.rotate(-0.18); ctx.scale(2.4 - sp * 1.4, 2.4 - sp * 1.4);
+      ctx.globalAlpha = 0.9;
+      ctx.strokeStyle = '#e01e1e'; ctx.lineWidth = 8;
+      ctx.strokeRect(-290, -55, 580, 110);
+      ctx.fillStyle = '#e01e1e'; ctx.font = 'bold 72px monospace'; ctx.textAlign = 'center';
+      ctx.fillText('DURCHGEFALLEN!', 0, 25);
+      ctx.restore();
+    }
+  }
+}
+
 function cinCaption(text, color) {
   ctx.save();
   ctx.textAlign = 'center';
@@ -2115,7 +2226,7 @@ function drawSuperBanner(cin) {
   ctx.fillStyle = '#fff';
   ctx.fillText(name, x, 54);
   ctx.font = 'bold 20px monospace';
-  ctx.fillStyle = cin.kind === 'max' ? '#9fe06a' : '#ff6f91';
+  ctx.fillStyle = cin.kind === 'max' ? '#9fe06a' : cin.kind === 'lisa' ? '#d7f02a' : '#ff6f91';
   ctx.fillText('★ ' + who + ' ★', CANVAS_W / 2 + (1 - slide) * 500, CANVAS_H - 26);
   ctx.restore();
 }
@@ -2127,11 +2238,13 @@ function drawCinematic() {
   var bg = ctx.createLinearGradient(0, 0, 0, CANVAS_H);
   if (cin.kind === 'max') { bg.addColorStop(0, '#10140a'); bg.addColorStop(1, '#04060a'); }
   else if (cin.kind === 'nova') { bg.addColorStop(0, '#201326'); bg.addColorStop(1, '#0a0610'); }
+  else if (cin.kind === 'lisa') { bg.addColorStop(0, '#1b2433'); bg.addColorStop(1, '#0a0d14'); }
   else { bg.addColorStop(0, '#160a18'); bg.addColorStop(1, '#05030a'); }
   ctx.fillStyle = bg; ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
 
-  if (cin.kind !== 'nova') drawSpeedLines(cin);
+  if (cin.kind !== 'nova' && cin.kind !== 'lisa') drawSpeedLines(cin);
   if (cin.kind === 'max') drawMaxSuper(cin);
+  else if (cin.kind === 'lisa') drawLisaSuper(cin);
   else if (cin.kind === 'nova') drawNovaSuper(cin);
   else drawLukaSuper(cin);
   drawParticles();
