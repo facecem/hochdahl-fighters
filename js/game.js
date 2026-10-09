@@ -327,6 +327,7 @@ function createFighter(charDef, x, facing, controls) {
     slowTimer: 0,
     markTimer: 0,
     money: 500, bribedTimer: 0,
+    steam: 0, steamBonus: 0, noJumpTimer: 0, rootTimer: 0, faults: 0,
   };
 }
 
