@@ -1554,6 +1554,59 @@ const CHARACTERS = [
       });
     },
   },
+  {
+    id: 'felix', name: 'Felix', title: 'Der Analog-Fotograf',
+    palette: { skin: '#eac3a3', hair: '#3b2418', primary: '#4a4232', secondary: '#9cb8d4', accent: '#c0c0c8', outline: '#15130f' },
+    stats: { speed: 2.1, jumpVel: -10.6, health: 95 },
+    moves: {
+      punch: { name: 'Stativ-Stoß', anim: 'lungethrust', dmg: 6, range: 165, total: 22, active: [6, 12], cooldown: 16, knockback: 4, fx: '#c0c0c8' },
+      kick: { name: 'Selbstauslöser', anim: 'snapjab', dmg: 0, range: 0, total: 22, active: [8, 10], cooldown: 120, knockback: 0, spawn: 'selftimer', film: 1, fx: '#fff' },
+      fwd_punch: { name: 'Negativ', anim: 'flashjab', dmg: 6, range: 125, total: 22, active: [6, 11], cooldown: 50, knockback: 3, invert: 150, film: 1, fx: '#ffffff' },
+      fwd_kick: { name: 'Polaroid-Fächer', anim: 'snapjab', dmg: 0, range: 0, total: 22, active: [8, 10], cooldown: 70, knockback: 0, spawn: 'polaroids', film: 1, fx: '#fff' },
+      special: { name: 'Doppelbelichtung', dmg: 0, range: 0, total: 24, active: [8, 10], type: 'clone', duration: 360 },
+    },
+    draw(ctx, fighter, w, h) {
+      drawHumanoid(ctx, w, h, fighter, this.palette, ({ w, h, cx, headR, torsoY, torsoH, frontFist, backFist }) => {
+        // ribbed knit: vertical ribs
+        ctx.strokeStyle = 'rgba(0,0,0,0.22)'; ctx.lineWidth = 1;
+        for (let rx = w * 0.22; rx < w * 0.8; rx += 4) { ctx.beginPath(); ctx.moveTo(rx, torsoY + 3); ctx.lineTo(rx, torsoY + torsoH - 3); ctx.stroke(); }
+        // camera strap + analog camera on the chest
+        ctx.strokeStyle = '#1a1a1a'; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(cx - w * 0.14, torsoY); ctx.lineTo(cx, torsoY + torsoH * 0.42); ctx.lineTo(cx + w * 0.14, torsoY); ctx.stroke();
+        if (fighter.state !== 'fwd_punch' && fighter.state !== 'kick') {
+          ctx.fillStyle = '#1a1a1a'; ctx.fillRect(cx - 9, torsoY + torsoH * 0.38, 18, 11);
+          ctx.fillStyle = '#c0c0c8'; ctx.fillRect(cx - 9, torsoY + torsoH * 0.38, 18, 3);
+          ctx.fillStyle = '#555'; ctx.beginPath(); ctx.arc(cx + 2, torsoY + torsoH * 0.38 + 7, 3.5, 0, Math.PI * 2); ctx.fill();
+        }
+        // wavy dark curls, a bit longer at the back and sides
+        ctx.fillStyle = '#3b2418';
+        for (let i = 0; i < 7; i++) {
+          const a = Math.PI * (1.0 + i * 0.16);
+          ctx.beginPath(); ctx.arc(cx + Math.cos(a) * headR * 0.95, headR + 2 + Math.sin(a) * headR * 0.95, headR * 0.34, 0, Math.PI * 2); ctx.fill();
+        }
+        ctx.beginPath(); ctx.arc(cx - headR * 0.85, headR * 1.65, headR * 0.34, 0, Math.PI * 2); ctx.fill();
+        ctx.beginPath(); ctx.arc(cx - headR * 0.7, headR * 2.05, headR * 0.3, 0, Math.PI * 2); ctx.fill();
+        // thin moustache
+        ctx.strokeStyle = '#3b2418'; ctx.lineWidth = 1.4;
+        ctx.beginPath(); ctx.moveTo(cx + headR * 0.15, headR * 1.48); ctx.quadraticCurveTo(cx + headR * 0.38, headR * 1.4, cx + headR * 0.62, headR * 1.5); ctx.stroke();
+        // silver rings
+        ctx.fillStyle = '#c0c0c8'; ctx.fillRect(backFist.x - 2, backFist.y - 1, 4, 2);
+        // props
+        if (fighter.state === 'punch') {
+          ctx.strokeStyle = '#2b2b2b'; ctx.lineWidth = 3;
+          ctx.beginPath(); ctx.moveTo(frontFist.x - 18, frontFist.y + 2); ctx.lineTo(frontFist.x + 34, frontFist.y - 2); ctx.stroke();
+          ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(frontFist.x + 34, frontFist.y - 2); ctx.lineTo(frontFist.x + 40, frontFist.y - 6); ctx.moveTo(frontFist.x + 34, frontFist.y - 2); ctx.lineTo(frontFist.x + 40, frontFist.y + 3); ctx.stroke();
+        } else if (fighter.state === 'fwd_punch' || fighter.state === 'kick' || fighter.state === 'special') {
+          ctx.fillStyle = '#1a1a1a'; ctx.fillRect(frontFist.x - 8, frontFist.y - 14, 20, 13);
+          ctx.fillStyle = '#c0c0c8'; ctx.fillRect(frontFist.x - 8, frontFist.y - 14, 20, 3);
+          ctx.fillStyle = '#555'; ctx.beginPath(); ctx.arc(frontFist.x + 6, frontFist.y - 7, 4, 0, Math.PI * 2); ctx.fill();
+        } else if (fighter.state === 'fwd_kick') {
+          ctx.fillStyle = '#f7f7f2';
+          for (let k = 0; k < 3; k++) { ctx.fillRect(frontFist.x - 4 + k * 3, frontFist.y - 14 + k * 2, 12, 14); }
+        }
+      });
+    },
+  },
 ];
 
 function drawProjectile(ctx, p) {
@@ -1564,6 +1617,11 @@ function drawProjectile(ctx, p) {
     ctx.fillStyle = '#7f8c8d'; ctx.fillRect(-14, -3, 28, 6);
     ctx.fillStyle = '#3498db'; ctx.fillRect(-12, -14, 24, 11);
     ctx.strokeStyle = '#bdc3c7'; ctx.strokeRect(-12, -14, 24, 11);
+  } else if (p.type === 'polaroid') {
+    ctx.rotate(-(p.rotation || 0) + Math.sin(p.rotation * 2) * 0.3);
+    ctx.fillStyle = '#f7f7f2'; ctx.fillRect(-11, -12, 22, 25);
+    ctx.fillStyle = '#3d4b5c'; ctx.fillRect(-8, -9, 16, 15);
+    ctx.fillStyle = '#e8c39a'; ctx.beginPath(); ctx.arc(0, -2, 4, 0, Math.PI * 2); ctx.fill();
   } else if (p.type === 'bribe') {
     ctx.rotate(Math.sin(p.rotation) * 0.4 - p.rotation);
     ctx.fillStyle = '#b48ad8'; ctx.fillRect(-16, -8, 32, 16);
