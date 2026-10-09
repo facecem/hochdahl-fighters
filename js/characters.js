@@ -39,6 +39,31 @@ function drawStar(ctx, x, y, r, color) {
   ctx.fill();
 }
 
+function drawStripes(ctx, x, y, w, h, base, stripe) {
+  if (base) { ctx.fillStyle = base; ctx.fillRect(x, y, w, h); }
+  ctx.fillStyle = stripe;
+  for (let sy = y + 3; sy < y + h - 2; sy += 10) ctx.fillRect(x, sy, w, Math.min(5, y + h - sy));
+}
+
+function drawLongHair(ctx, cx, headR, len, color, shine) {
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(cx, headR + 2, headR * 1.05, Math.PI * 1.02, Math.PI * 1.98); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx - headR * 0.6, headR * 0.3);
+  ctx.quadraticCurveTo(cx - headR * 1.35, headR * 1.2, cx - headR * 1.2, len);
+  ctx.lineTo(cx - headR * 0.55, len - 3);
+  ctx.quadraticCurveTo(cx - headR * 0.75, headR * 1.4, cx - headR * 0.35, headR * 0.6);
+  ctx.closePath(); ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(cx + headR * 0.75, headR * 0.6);
+  ctx.quadraticCurveTo(cx + headR * 1.15, headR * 1.3, cx + headR * 0.95, headR * 2.5);
+  ctx.lineTo(cx + headR * 0.7, headR * 2.4);
+  ctx.quadraticCurveTo(cx + headR * 0.85, headR * 1.4, cx + headR * 0.6, headR * 0.8);
+  ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = shine; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.moveTo(cx - headR * 0.9, headR * 1.1); ctx.quadraticCurveTo(cx - headR * 1.05, headR * 1.8, cx - headR * 0.95, len - 6); ctx.stroke();
+}
+
 function drawHumanoid(ctx, w, h, fighter, palette, accessories) {
   const { skin, primary, secondary, hair } = palette;
   const outline = palette.outline || '#10101a';
@@ -1333,6 +1358,97 @@ const CHARACTERS = [
       });
     },
   },
+  {
+    id: 'kata', name: 'Kata', title: 'Die Immobilien-Haiin',
+    palette: { skin: '#e2b48f', hair: '#4a3426', primary: '#1f2a4d', secondary: '#2a3760', accent: '#c9a227', outline: '#10141f' },
+    stats: { speed: 2.1, jumpVel: -10.4, health: 100 },
+    moves: {
+      punch: { name: 'Schlüsselbund-Jab', anim: 'snapjab', dmg: 3, hits: 2, hitGap: 6, range: 116, total: 18, active: [4, 13], cooldown: 14, knockback: 2, fx: '#c9a227' },
+      kick: { name: 'Besichtigungstermin', anim: 'overhead', dmg: 12, range: 150, total: 34, active: [13, 21], cooldown: 32, knockback: 6, groundBounce: true, fx: '#e74c3c' },
+      fwd_punch: { name: 'Mieterhöhung', anim: 'dashpunch', dmg: 8, range: 128, total: 24, active: [7, 13], cooldown: 26, knockback: 5, meterDrain: 15, drainLabel: 'MIETERHÖHUNG!', fx: '#c9a227' },
+      fwd_kick: { name: 'Zwangsräumung', anim: 'judogrip', type: 'grab', dmg: 12, range: 105, total: 28, active: [6, 13], cooldown: 32, knockback: 0, throwTotal: 26, throwDist: 3.4, fx: '#f2efe8' },
+      special: { name: 'Abriss!', dmg: 25, range: 999, total: 40, active: [14, 16], type: 'projectile', projectile: 'wreckball', speed: 8 },
+    },
+    draw(ctx, fighter, w, h) {
+      drawHumanoid(ctx, w, h, fighter, this.palette, ({ w, h, cx, headR, torsoY, torsoH, hipY, frontFist, backFist }) => {
+        // striped sweater peeking out of the open blazer
+        drawStripes(ctx, cx - w * 0.11, torsoY + 2, w * 0.22, torsoH * 0.8, '#f2efe8', '#1f2a4d');
+        ctx.fillStyle = '#1f2a4d';
+        ctx.beginPath(); ctx.moveTo(cx - w * 0.13, torsoY); ctx.lineTo(cx - w * 0.02, torsoY + torsoH * 0.45); ctx.lineTo(cx - w * 0.13, torsoY + torsoH * 0.8); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(cx + w * 0.13, torsoY); ctx.lineTo(cx + w * 0.02, torsoY + torsoH * 0.45); ctx.lineTo(cx + w * 0.13, torsoY + torsoH * 0.8); ctx.fill();
+        // gold blazer button + keys on the belt
+        ctx.fillStyle = '#c9a227';
+        ctx.beginPath(); ctx.arc(cx + w * 0.1, torsoY + torsoH * 0.62, 2, 0, Math.PI * 2); ctx.fill();
+        ctx.strokeStyle = '#c9a227'; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(cx - w * 0.2, hipY - 4, 3.5, 0, Math.PI * 2); ctx.stroke();
+        ctx.fillRect(cx - w * 0.22, hipY, 2, 7); ctx.fillRect(cx - w * 0.18, hipY, 2, 6);
+        drawLongHair(ctx, cx, headR, h * 0.27, '#4a3426', '#5e4433');
+        // sunglasses pushed up into the hair
+        ctx.fillStyle = '#111';
+        ctx.fillRect(cx - headR * 0.55, headR * 0.35, headR * 0.5, headR * 0.22);
+        ctx.fillRect(cx + headR * 0.1, headR * 0.35, headR * 0.5, headR * 0.22);
+        // red lips
+        ctx.fillStyle = '#a8323e';
+        ctx.beginPath(); ctx.ellipse(cx + headR * 0.32, headR * 1.6, headR * 0.2, headR * 0.09, 0, 0, Math.PI * 2); ctx.fill();
+        // "ZU VERKAUFEN" sign during the overhead slam
+        if (fighter.state === 'kick') {
+          ctx.save(); ctx.translate(frontFist.x, frontFist.y);
+          ctx.strokeStyle = '#6b4b2a'; ctx.lineWidth = 3;
+          ctx.beginPath(); ctx.moveTo(0, 6); ctx.lineTo(0, -34); ctx.stroke();
+          ctx.fillStyle = '#fff'; ctx.fillRect(-2, -52, 46, 24);
+          ctx.strokeStyle = '#e74c3c'; ctx.lineWidth = 2; ctx.strokeRect(-2, -52, 46, 24);
+          ctx.fillStyle = '#e74c3c'; ctx.font = 'bold 8px monospace'; ctx.textAlign = 'center';
+          ctx.fillText('ZU', 21, -42); ctx.fillText('VERKAUFEN', 21, -33);
+          ctx.restore();
+        } else if (fighter.state === 'special') {
+          // remote control for the crane
+          ctx.fillStyle = '#333'; ctx.fillRect(frontFist.x - 4, frontFist.y - 10, 9, 14);
+          ctx.fillStyle = '#e74c3c'; ctx.beginPath(); ctx.arc(frontFist.x + 0.5, frontFist.y - 6, 2, 0, Math.PI * 2); ctx.fill();
+        } else {
+          // clipboard with listing
+          ctx.fillStyle = '#8b5a2b'; ctx.fillRect(backFist.x - 7, backFist.y - 12, 14, 18);
+          ctx.fillStyle = '#fff'; ctx.fillRect(backFist.x - 5, backFist.y - 9, 10, 13);
+        }
+      });
+    },
+  },
+  {
+    id: 'lisa', name: 'Lisa', title: 'Die Fahrlehrerin',
+    palette: { skin: '#f0cfb4', hair: '#d8c08a', primary: '#ece8de', secondary: '#1f2a4d', accent: '#d7f02a', outline: '#14161f' },
+    stats: { speed: 2.2, jumpVel: -10.6, health: 95 },
+    moves: {
+      punch: { name: 'Kellen-Stopp', anim: 'flashjab', dmg: 5, range: 125, total: 16, active: [4, 8], cooldown: 14, knockback: 3, faultPoint: true, fx: '#e74c3c' },
+      kick: { name: 'Vollbremsung', anim: 'stomp', dmg: 11, range: 110, total: 30, active: [10, 18], cooldown: 30, knockback: 5, antiAir: true, knockdown: true, faultPoint: true, fx: '#d7f02a' },
+      fwd_punch: { name: 'Schulterblick', anim: 'dashpunch', dmg: 7, range: 130, total: 24, active: [7, 13], cooldown: 26, knockback: 5, counterMult: 2.5, counterLabel: 'SCHULTERBLICK!', faultPoint: true, fx: '#ffffff' },
+      fwd_kick: { name: 'Rückwärts einparken', anim: 'lowslide', dmg: 10, range: 150, total: 32, active: [11, 20], cooldown: 30, knockback: 6, lunge: 24, retreat: true, faultPoint: true, fx: '#d7f02a' },
+      special: { name: 'Prüfungsfahrt', dmg: 17, range: 130, total: 36, active: [8, 18], knockback: 16, stun: 30, type: 'grab' },
+    },
+    draw(ctx, fighter, w, h) {
+      drawHumanoid(ctx, w, h, fighter, this.palette, ({ w, h, cx, headR, torsoY, torsoH, frontFist }) => {
+        drawStripes(ctx, w * 0.18 + 1, torsoY + 2, w * 0.64 - 2, torsoH - 4, null, '#1f2a4d');
+        // hi-vis vest panels with reflective strip
+        ctx.fillStyle = '#d7f02a';
+        ctx.fillRect(w * 0.18, torsoY, w * 0.17, torsoH * 0.92);
+        ctx.fillRect(w * 0.65, torsoY, w * 0.17, torsoH * 0.92);
+        ctx.fillStyle = '#d9d9d9';
+        ctx.fillRect(w * 0.18, torsoY + torsoH * 0.6, w * 0.17, 4);
+        ctx.fillRect(w * 0.65, torsoY + torsoH * 0.6, w * 0.17, 4);
+        // "L" learner plate on her back
+        ctx.fillStyle = '#fff'; ctx.fillRect(w * 0.19, torsoY + torsoH * 0.18, 13, 13);
+        ctx.strokeStyle = '#1a4fd0'; ctx.lineWidth = 1.5; ctx.strokeRect(w * 0.19, torsoY + torsoH * 0.18, 13, 13);
+        ctx.fillStyle = '#1a4fd0'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
+        ctx.fillText('L', w * 0.19 + 6.5, torsoY + torsoH * 0.18 + 10);
+        drawLongHair(ctx, cx, headR, h * 0.24, '#d8c08a', '#e8d6a6');
+        ctx.fillStyle = '#c4566a';
+        ctx.beginPath(); ctx.ellipse(cx + headR * 0.32, headR * 1.6, headR * 0.2, headR * 0.09, 0, 0, Math.PI * 2); ctx.fill();
+        // traffic paddle (Kelle)
+        ctx.strokeStyle = '#333'; ctx.lineWidth = 3; ctx.lineCap = 'round';
+        ctx.beginPath(); ctx.moveTo(frontFist.x, frontFist.y + 4); ctx.lineTo(frontFist.x + 4, frontFist.y - 14); ctx.stroke();
+        ctx.fillStyle = '#e74c3c'; ctx.beginPath(); ctx.arc(frontFist.x + 5, frontFist.y - 21, 8, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(frontFist.x + 5, frontFist.y - 21, 4.5, 0, Math.PI * 2); ctx.fill();
+      });
+    },
+  },
 ];
 
 function drawProjectile(ctx, p) {
@@ -1343,6 +1459,15 @@ function drawProjectile(ctx, p) {
     ctx.fillStyle = '#7f8c8d'; ctx.fillRect(-14, -3, 28, 6);
     ctx.fillStyle = '#3498db'; ctx.fillRect(-12, -14, 24, 11);
     ctx.strokeStyle = '#bdc3c7'; ctx.strokeRect(-12, -14, 24, 11);
+  } else if (p.type === 'wreckball') {
+    ctx.rotate(-(p.rotation || 0));
+    ctx.strokeStyle = '#555'; ctx.lineWidth = 3; ctx.setLineDash([5, 3]);
+    ctx.beginPath(); ctx.moveTo(0, -24); ctx.lineTo(0, -p.y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#2b2b2f'; ctx.beginPath(); ctx.arc(0, 0, 26, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.25)'; ctx.beginPath(); ctx.arc(-8, -9, 8, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#c9a227'; ctx.font = 'bold 10px monospace'; ctx.textAlign = 'center';
+    ctx.fillText('ABRISS', 0, 4);
   } else if (p.type === 'shockwave') {
     const colors = ['#ff2d95', '#e8c547', '#00e6c3', '#3b5998', '#9b59b6'];
     const dir = p.vx >= 0 ? 1 : -1;
