@@ -1,5 +1,5 @@
 (function () {
-const { CHARACTERS, FIGHTER_WIDTH, FIGHTER_HEIGHT, drawProjectile } = window.SF;
+const { CHARACTERS, FIGHTER_WIDTH, FIGHTER_HEIGHT, drawProjectile, BODYGUARD } = window.SF;
 
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
@@ -326,6 +326,7 @@ function createFighter(charDef, x, facing, controls) {
     knockedDown: false,
     slowTimer: 0,
     markTimer: 0,
+    money: 500, bribedTimer: 0,
   };
 }
 
@@ -433,6 +434,7 @@ function updateFighter(f) {
   if (f.slowTimer > 0) f.slowTimer--;
   if (f.noJumpTimer > 0) f.noJumpTimer--;
   if (f.rootTimer > 0) f.rootTimer--;
+  if (f.bribedTimer > 0) f.bribedTimer--;
   if (f.markTimer > 0) {
     f.markTimer--;
     if (globalTime % 6 === 0) spawnParticles(f.x + FIGHTER_WIDTH / 2, f.y - 6, '#f5d76e', 1, 1);
@@ -618,6 +620,8 @@ function updateFighter(f) {
         side: (opp.x + FIGHTER_WIDTH / 2) >= sx ? 1 : -1 });
       playSound(move.spawnBarrier ? 'parry' : 'select');
     }
+    // Ben: paid summons and thrown valuables, released as the move goes active
+    if (move.spawn && preTimer < move.active[0] && f.stateTimer >= move.active[0]) spawnBenObject(f, move);
     // Stomp shockwave: the ground impact sends a short tremor along the floor
     if (move.stompWave && f.grounded && preTimer < move.active[0] && f.stateTimer >= move.active[0]) {
       projectiles.push({
@@ -632,7 +636,7 @@ function updateFighter(f) {
       if (f.state !== 'special' || move.cooldown) {
         f.cooldowns[f.state] = f.grounded ? (move.cooldown || 0) : Math.round((move.cooldown || 0) * 0.5);
       }
-      var wasKickWhiff = (f.state === 'kick' || f.state === 'fwd_kick') && f.grounded && !f.hasHit && !move.spawnRail && !move.spawnBarrier;
+      var wasKickWhiff = (f.state === 'kick' || f.state === 'fwd_kick') && f.grounded && !f.hasHit && !move.spawnRail && !move.spawnBarrier && !move.spawn;
       var wasCommitWhiff = move.whiffPunish && f.grounded && !f.hasHit;
       var whiffLag = wasCommitWhiff ? (move.whiffStun || 30) : WHIFF_STUN;
       var wasParryStunned = f.parryStunned;
@@ -702,6 +706,9 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
   // Normal damage
   var finalDmg = dmg;
   var finalKnock = knockback;
+  // Ben's bribe: a bought-off fighter's attacks deal no damage
+  var bribed = attacker.bribedTimer > 0;
+  if (bribed) spawnPopup(hx, hy - 40, 'BESTOCHEN!', '#b48ad8');
   if (isCounter) {
     finalDmg = Math.round(dmg * (moveFlags.counterMult || 1.5));
     finalKnock *= 1.3;
@@ -752,6 +759,7 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
   if (attacker.hyperTimer > 0 && attacker.hyperMove) {
     finalDmg = Math.max(1, Math.round(finalDmg * (attacker.hyperMove.dmgMult || 1)));
   }
+  if (bribed) finalDmg = 0;
   defender.hp = Math.max(0, defender.hp - finalDmg);
   defender.hitFlash = 8;
   var dir = defender.x < attacker.x ? -1 : 1;
@@ -885,6 +893,8 @@ function applyDamage(defender, dmg, attacker, knockback, ignoreBlock, stun, isCo
   attacker.meter = Math.min(METER_MAX, attacker.meter + finalDmg * METER_GAIN_ATTACKER * (moveFlags.meterMult || 1));
   // Kata's commission: every deal closed pays a little extra meter
   if (attacker.charDef.id === 'kata') attacker.meter = Math.min(METER_MAX, attacker.meter + 4);
+  // Ben's account: every landed hit pays out
+  if (attacker.charDef.id === 'ben' && finalDmg > 0) attacker.money += 50;
   if (!moveFlags.meterDrain) {
     defender.meter = Math.min(METER_MAX, defender.meter + finalDmg * METER_GAIN_DEFENDER);
   }
@@ -973,7 +983,7 @@ function updateCinematic() {
 function checkMeleeHit(attacker, defender) {
   if (!isAttackState(attacker)) return;
   var move = attacker.charDef.moves[attacker.state];
-  if (move.type === 'projectile' || move.type === 'rewind' || move.type === 'hyper' || move.type === 'crossing') return;
+  if (move.type === 'projectile' || move.type === 'rewind' || move.type === 'hyper' || move.type === 'crossing' || move.type === 'moneyrain') return;
   var maxHits = move.hits || 1;
   if ((attacker.hitCount || 0) >= maxHits) return;
 
@@ -1178,6 +1188,13 @@ function checkProjectileSpawn(attacker) {
       meterSteal: move.meterSteal || 0,
     });
     attacker.hasHit = true;
+  } else if (move.type === 'moneyrain') {
+    // the richer Ben is, the more gold rains down; it empties the account
+    var drops = Math.min(14, 4 + Math.floor((attacker.money || 0) / 100));
+    spawnPopup(attacker.x + FIGHTER_WIDTH / 2, attacker.y - 10, '-' + (attacker.money || 0) + '€', '#d4af37');
+    attacker.money = 0;
+    stageObjects.push({ type: 'heli', owner: attacker, dir: attacker.facing, age: 0, drops: drops, dropped: 0 });
+    attacker.hasHit = true;
   } else if (move.type === 'crossing') {
     stageObjects.push({ type: 'crossing', owner: attacker, dir: attacker.facing, age: 0, hit: false });
     attacker.hasHit = true;
@@ -1250,6 +1267,17 @@ function updateProjectiles() {
       playSound('parry');
       continue;
     }
+    // Ben's credit card: flies out, turns around, can hit once each way, ends back in his hand
+    if (p.type === 'card') {
+      if (!p.returning && (Math.abs(p.x - p.startX) > 420 || p.x < 0 || p.x > CANVAS_W)) { p.returning = true; p.vx = -p.vx; }
+      if (hitsTarget && !(p.returning ? p.hitBack : p.hitOut)) {
+        applyDamage(target, p.dmg, p.owner, 5, false, 14, false, true);
+        spawnParticles(p.x, p.y, '#d4af37', 10, 4);
+        if (p.returning) p.hitBack = true; else p.hitOut = true;
+      }
+      if (p.returning && Math.abs(p.x - (p.owner.x + FIGHTER_WIDTH / 2)) < 30) projectiles.splice(i, 1);
+      continue;
+    }
     if (hitsTarget) {
       var pColor = p.type === 'toast' ? '#e6b35c' : (p.type === 'shockwave' ? '#e8c547' : (p.type === 'tremor' ? '#b0a48c' : (p.type === 'flash' ? '#fff7cc' : (p.type === 'wreckball' ? '#9a8468' : '#3498db'))));
       var pStun = p.type === 'flash' || p.type === 'wreckball' ? 30 : 14;
@@ -1257,6 +1285,10 @@ function updateProjectiles() {
       applyDamage(target, p.dmg, p.owner, pKnock, false, pStun, false, true, p.type === 'wreckball' ? { knockdown: true } : undefined);
       if (p.type === 'wreckball') { shake = Math.min(20, shake + 12); playSound('boom'); }
       if (p.type === 'flash') { target.stunned = true; flashBurst = 0.7; spawnPopup(target.x + FIGHTER_WIDTH / 2, target.y, 'GEBLENDET!', '#fff7cc'); }
+      if (p.bribe && target.state !== 'parry') {
+        target.bribedTimer = p.bribe;
+        spawnPopup(target.x + FIGHTER_WIDTH / 2, target.y - 24, 'BESTOCHEN!', '#b48ad8');
+      }
       // Data theft: the laptop siphons special meter from the target to its owner
       if (p.meterSteal) {
         var stolen = Math.min(target.meter, p.meterSteal);
@@ -1294,6 +1326,42 @@ function updateStageObjects() {
         spawnParticles(o.x, FLOOR_Y - 6, '#8a8a8a', 12, 5);
         stageObjects.splice(i, 1);
       } else if (o.age >= o.life) stageObjects.splice(i, 1);
+    } else if (o.type === 'bodyguard') {
+      if (o.phase === 'walk') {
+        o.x += o.facing * 5;
+        if (Math.abs(o.x - ocx) < 75) { o.phase = 'punch'; o.t = 0; }
+        else if (o.x < -60 || o.x > CANVAS_W + 60) { stageObjects.splice(i, 1); continue; }
+      } else if (o.phase === 'punch') {
+        o.t++;
+        if (o.t === 7 && Math.abs(o.x - ocx) < 100 && GROUND_Y - opp.y < 80) {
+          applyDamage(opp, o.dmg, o.owner, 8, false, 18, false, true);
+          playSound('hit');
+        }
+        if (o.t >= 22) { o.phase = 'leave'; o.t = 0; }
+      } else {
+        o.t++;
+        o.x -= o.facing * 6;
+        if (o.t > 30) { stageObjects.splice(i, 1); continue; }
+      }
+    } else if (o.type === 'heli') {
+      o.x = o.dir > 0 ? -160 + o.age * 7.5 : CANVAS_W + 160 - o.age * 7.5;
+      if (o.age % 24 === 1) playSound('whoosh');
+      if (o.dropped < o.drops && o.age >= 20 + Math.floor(o.dropped * 160 / o.drops)) {
+        o.dropped++;
+        var dx = Math.max(30, Math.min(CANVAS_W - 30, ocx + (Math.random() - 0.5) * 320));
+        stageObjects.push({ type: 'drop', x: dx, y: 70, vy: 2, owner: o.owner, gold: Math.random() < 0.5, age: 0 });
+      }
+      if (o.age > 230) stageObjects.splice(i, 1);
+    } else if (o.type === 'drop') {
+      o.vy += 0.45; o.y += o.vy;
+      if (Math.abs(o.x - ocx) < 34 && o.y > opp.y && o.y < opp.y + FIGHTER_HEIGHT && opp.state !== 'ko') {
+        applyDamage(opp, o.owner.charDef.moves.special.dmg, o.owner, 4, false, 16, false, true);
+        spawnParticles(o.x, o.y, '#d4af37', 10, 4);
+        stageObjects.splice(i, 1);
+      } else if (o.y >= FLOOR_Y - 8) {
+        spawnParticles(o.x, FLOOR_Y - 4, o.gold ? '#d4af37' : '#3fae5a', 8, 4);
+        stageObjects.splice(i, 1);
+      }
     } else if (o.type === 'crossing') {
       if (o.age < CROSSING_WARN && o.age % 20 === 1) playSound('select');
       if (o.age === CROSSING_WARN) { playSound('boom'); shake = 18; }
@@ -1316,8 +1384,65 @@ function updateStageObjects() {
   }
 }
 
+function spawnBenObject(f, move) {
+  var paid = true;
+  if (move.cost) {
+    paid = f.money >= move.cost;
+    if (paid) { f.money -= move.cost; spawnPopup(f.x + FIGHTER_WIDTH / 2, f.y - 10, '-' + move.cost + '€', '#d4af37'); }
+    else spawnPopup(f.x + FIGHTER_WIDTH / 2, f.y - 10, 'PLEITE!', '#ff5252');
+  }
+  var fx = f.x + FIGHTER_WIDTH / 2, fy = f.y + FIGHTER_HEIGHT * 0.35;
+  if (move.spawn === 'bodyguard') {
+    stageObjects = stageObjects.filter(function (o) { return !(o.type === 'bodyguard' && o.owner === f); });
+    stageObjects.push({ type: 'bodyguard', x: fx + f.facing * 30, owner: f, facing: f.facing, age: 0, phase: 'walk', t: 0, dmg: paid ? 12 : 6 });
+  } else if (move.spawn === 'bribe') {
+    projectiles.push({ x: fx + f.facing * 30, y: fy, vx: 9 * f.facing, dmg: 2, type: 'bribe', owner: f, rotation: 0, bribe: paid ? 120 : 60 });
+  } else if (move.spawn === 'card') {
+    projectiles.push({ x: fx + f.facing * 30, y: fy, startX: fx, vx: 12 * f.facing, dmg: 6, type: 'card', owner: f, rotation: 0 });
+  }
+  playSound('whoosh');
+}
+
 function drawStageObjects(front) {
   stageObjects.forEach(function (o) {
+    if (o.type === 'bodyguard' && !front) {
+      ctx.save();
+      if (o.phase === 'leave') ctx.globalAlpha = Math.max(0, 1 - o.t / 30);
+      drawActor(BODYGUARD, o.x, FLOOR_Y, o.phase === 'leave' ? -o.facing : o.facing, 1,
+        mkActor(BODYGUARD, o.phase === 'punch' ? 'punch' : 'walk', o.phase === 'punch' ? o.t : 0));
+      ctx.restore();
+      return;
+    }
+    if (o.type === 'heli' && front) {
+      ctx.save(); ctx.translate(o.x, 110); ctx.scale(o.dir, 1);
+      ctx.fillStyle = '#16161a';
+      ctx.beginPath(); ctx.ellipse(0, 0, 60, 28, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillRect(-130, -6, 80, 10); ctx.fillRect(-138, -22, 10, 24);
+      ctx.fillStyle = '#9fd3ff'; ctx.beginPath(); ctx.ellipse(28, -4, 24, 16, 0, -Math.PI / 2, Math.PI / 2); ctx.fill();
+      ctx.fillStyle = '#d4af37'; ctx.fillRect(-50, 6, 80, 5);
+      ctx.font = 'bold 14px monospace'; ctx.textAlign = 'center'; ctx.fillText('€', -10, 2);
+      ctx.strokeStyle = '#333'; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(0, -28); ctx.lineTo(0, -36); ctx.stroke();
+      var rw = 90 * Math.abs(Math.cos(o.age * 0.9));
+      ctx.beginPath(); ctx.moveTo(-rw, -36); ctx.lineTo(rw, -36); ctx.stroke();
+      ctx.fillRect(-48, 26, 90, 3);
+      ctx.restore();
+      return;
+    }
+    if (o.type === 'drop' && front) {
+      ctx.save(); ctx.translate(o.x, o.y);
+      if (o.gold) {
+        ctx.fillStyle = '#d4af37';
+        ctx.beginPath(); ctx.moveTo(-16, 8); ctx.lineTo(16, 8); ctx.lineTo(10, -6); ctx.lineTo(-10, -6); ctx.closePath(); ctx.fill();
+        ctx.fillStyle = '#fff3c4'; ctx.fillRect(-8, -4, 10, 3);
+      } else {
+        ctx.fillStyle = '#8b6a3e'; ctx.beginPath(); ctx.arc(0, 2, 14, 0, Math.PI * 2); ctx.fill();
+        ctx.fillRect(-5, -16, 10, 8);
+        ctx.fillStyle = '#d4af37'; ctx.font = 'bold 14px monospace'; ctx.textAlign = 'center'; ctx.fillText('€', 0, 7);
+      }
+      ctx.restore();
+      return;
+    }
     if (o.type === 'barrier' && !front) {
       var drop = Math.min(1, o.age / 10), fade = Math.min(1, (o.life - o.age) / 20);
       ctx.save(); ctx.globalAlpha = fade;
@@ -1515,6 +1640,7 @@ function resetFightersForRound() {
     f.counterStacks = 0; f.counterStackTimer = 0; f.knockedDown = false;
     f.slowTimer = 0; f.markTimer = 0; f.faults = 0;
     f.steam = 0; f.steamBonus = 0; f.noJumpTimer = 0; f.rootTimer = 0;
+    f.money = 500; f.bribedTimer = 0;
   });
   projectiles = []; particles = []; popups = []; stageObjects = [];
   roundTimer = 99; history = []; rewindEffect = 0; rewindGhosts = []; slowmo = 0;
@@ -1780,6 +1906,14 @@ function drawFighter(f) {
   }
 
   // Niklas' debuffs: voided ticket (no jump) / red signal (rooted)
+  if (f.bribedTimer > 0) {
+    ctx.save();
+    ctx.textAlign = 'center'; ctx.font = 'bold 12px monospace';
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 3; ctx.fillStyle = '#b48ad8';
+    ctx.strokeText('€ BESTOCHEN', f.x + FIGHTER_WIDTH / 2, f.y - 60);
+    ctx.fillText('€ BESTOCHEN', f.x + FIGHTER_WIDTH / 2, f.y - 60);
+    ctx.restore();
+  }
   if (f.noJumpTimer > 0 || f.rootTimer > 0) {
     ctx.save();
     ctx.textAlign = 'center'; ctx.font = 'bold 12px monospace';
@@ -1876,6 +2010,10 @@ function drawHealthBar(x, f, flip) {
     : usesRiposte ? specMove.name + ' (' + f.counterStacks + '/3 Konter)'
     : specMove.name;
   ctx.fillText(label, flip ? x + w : x, barY + 20);
+  if (f.charDef.id === 'ben') {
+    ctx.fillStyle = '#d4af37'; ctx.font = 'bold 13px monospace';
+    ctx.fillText('Kontostand: ' + f.money + ' €', flip ? x + w : x, barY + 36);
+  }
 }
 
 function drawHUD() {
@@ -2725,7 +2863,7 @@ window.__sfDebug = {
     }
     return out;
   },
-  state: function () { return { f1: { x: fighter1.x, state: fighter1.state, hp: fighter1.hp }, f2: { x: fighter2.x, state: fighter2.state, hp: fighter2.hp } }; },
+  state: function () { return { money: fighter1.money, f1: { x: fighter1.x, state: fighter1.state, hp: fighter1.hp }, f2: { x: fighter2.x, state: fighter2.state, hp: fighter2.hp } }; },
   meterTest: function (n) { fighter1.meter = 0; for (var i = 0; i < n; i++) update(); return { meter: fighter1.meter }; },
   landCounter: function () {
     // Yorick(f1) lands one counter on Max(f2) via the feint
