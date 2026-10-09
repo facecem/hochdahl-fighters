@@ -355,6 +355,12 @@ function spawnPopup(x, y, text, color) {
 
 function mv0(f, type) { return f.charDef.moves[type]; }
 function startAttack(f, type) {
+  // Ben can only spend money he actually has
+  var costMv = f.charDef.moves[type];
+  if (costMv && costMv.cost && (f.money || 0) < costMv.cost) {
+    if (globalTime - (f.brokeMsgAt || -99) > 30) { spawnPopup(f.x + FIGHTER_WIDTH / 2, f.y - 10, 'PLEITE! (' + costMv.cost + '€)', '#ff5252'); f.brokeMsgAt = globalTime; }
+    return;
+  }
   f.state = type;
   f.stateTimer = 0;
   f.hasHit = false;
