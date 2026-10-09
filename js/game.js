@@ -497,9 +497,12 @@ function updateFighter(f) {
   // Felix: an empty roll has to be rewound before he can act again
   if (f.charDef.id === 'felix') {
     if (f.reloadTimer > 0) {
-      f.reloadTimer--;
+      // the rewind only progresses while he is free; getting hit pauses it instead of cancelling hitstun
+      if (canAct) {
+        f.reloadTimer--;
+        if (f.grounded) { f.vx *= 0.6; f.state = 'idle'; }
+      }
       canAct = false;
-      if (f.grounded) { f.vx *= 0.6; f.state = 'idle'; }
       if (f.reloadTimer === 0) { f.film = 8; spawnPopup(f.x + FIGHTER_WIDTH / 2, f.y - 10, 'NEUER FILM!', '#f7f7f2'); }
     } else if (canAct && f.film <= 0 && f.grounded) {
       f.reloadTimer = 90; canAct = false;
@@ -1886,6 +1889,9 @@ function updateFight() {
 }
 
 function endRound() {
+  // freeze-frame cleanup: no stuck white hit flash or hovering stage props on the result screen
+  fighter1.hitFlash = 0; fighter2.hitFlash = 0;
+  stageObjects = [];
   var winner;
   if (fighter1.hp <= 0 && fighter2.hp <= 0) winner = 'draw';
   else if (fighter1.hp <= 0) winner = 'p2';
@@ -3185,7 +3191,7 @@ window.__sfDebug = {
     }
     return out;
   },
-  state: function () { return { mood: fighter1.mood, intang: fighter1.intangible, money: fighter1.money, film: fighter1.film, reload: fighter1.reloadTimer, f2inv: fighter2.invertTimer, f1: { x: fighter1.x, state: fighter1.state, hp: fighter1.hp }, f2: { x: fighter2.x, state: fighter2.state, hp: fighter2.hp } }; },
+  state: function () { return { gs: gameState, mood: fighter1.mood, intang: fighter1.intangible, money: fighter1.money, film: fighter1.film, reload: fighter1.reloadTimer, f2inv: fighter2.invertTimer, f1: { x: fighter1.x, state: fighter1.state, hp: fighter1.hp }, f2: { x: fighter2.x, state: fighter2.state, hp: fighter2.hp } }; },
   meterTest: function (n) { fighter1.meter = 0; for (var i = 0; i < n; i++) update(); return { meter: fighter1.meter }; },
   landCounter: function () {
     // Yorick(f1) lands one counter on Max(f2) via the feint
